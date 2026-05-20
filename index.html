@@ -6,7 +6,7 @@
 <style>body { font-family: Inter, system-ui, sans-serif; background: #f8fafc; } .ucm-loading { display:flex; align-items:center; justify-content:center; height:100vh; color:#64748b; font-size: 14px; }</style>
 <script type="importmap">{ "imports": { "react": "https://esm.sh/react@18.3.1", "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime", "react-dom": "https://esm.sh/react-dom@18.3.1", "react-dom/client": "https://esm.sh/react-dom@18.3.1/client", "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react", "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom", "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.4" } }</script>
 </head><body><div id="root"><div class="ucm-loading">Loading UCM Promotion Insights…</div></div><script type="module">
-// ../../tmp/ucm-entry-u4qo4uzmva8.jsx
+// ../../tmp/ucm-entry-i6nu7k6traj.jsx
 import React2 from "react";
 import { createRoot } from "react-dom/client";
 
@@ -309,6 +309,28 @@ var SupabaseAPI = {
     if (error) throw new Error(error.message);
     return null;
   },
+  // Count the number of sales rows recorded by a given promoter on a given
+  // promotion (via the parent shift). Used by the manager UI to decide
+  // whether removing the promoter should preserve their shift history.
+  countPromoterSales: async (promotionId, promoterId) => {
+    const { count, error } = await supabase.from("sales").select("id, shifts!inner(promoter_id, promotion_id)", { count: "exact", head: true }).eq("shifts.promoter_id", promoterId).eq("shifts.promotion_id", promotionId);
+    if (error) throw new Error(error.message);
+    return count || 0;
+  },
+  // Delete any shift rows for a promoter on a promotion that have NO child
+  // sales and NO child feedback notes. Returns the number of shifts removed.
+  // Called from the manager "remove promoter" flow when the promoter never
+  // recorded any sales — keeps the data set clean instead of leaving empty
+  // planned/active shift rows behind that pollute promoter dashboards.
+  deleteEmptyShiftsForPromoter: async (promotionId, promoterId) => {
+    const { data: shifts, error: e1 } = await supabase.from("shifts").select("id, sales(id), feedback_notes(id)").eq("promotion_id", promotionId).eq("promoter_id", promoterId);
+    if (e1) throw new Error(e1.message);
+    const emptyIds = (shifts || []).filter((s) => (!s.sales || s.sales.length === 0) && (!s.feedback_notes || s.feedback_notes.length === 0)).map((s) => s.id);
+    if (emptyIds.length === 0) return 0;
+    const { error: e2 } = await supabase.from("shifts").delete().in("id", emptyIds);
+    if (e2) throw new Error(e2.message);
+    return emptyIds.length;
+  },
   // -- CUSTOM QUESTIONS (per-promotion) ----------------------
   listCustomQuestions: async (promotionId) => {
     const { data, error } = await supabase.from("custom_questions").select("*").eq("promotion_id", promotionId).eq("active", true).order("position", { ascending: true });
@@ -342,6 +364,27 @@ var SupabaseAPI = {
     if (error) throw new Error(error.message);
     return null;
   },
+  // -- CUSTOM QUESTION ANSWERS -------------------------------
+  // Each promoter answer is written as one row, jsonb body. Read with the
+  // question label joined so the client report can show "Q · answer" pairs.
+  recordCustomAnswer: async (shiftId, questionId, answerValue, interactionId) => {
+    if (!shiftId || !questionId) throw new Error("shift_id and question_id are required");
+    const row = {
+      shift_id: shiftId,
+      question_id: questionId,
+      answer_json: { value: answerValue },
+      customer_interaction_id: interactionId || null
+    };
+    const { data, error } = await supabase.from("custom_question_answers").insert(row).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  listCustomAnswers: async (promotionId) => {
+    if (!promotionId) return [];
+    const { data, error } = await supabase.from("custom_question_answers").select("id, answer_json, recorded_at, shift_id, question_id, custom_questions!inner(id, label, field_type, client_visible, promotion_id)").eq("custom_questions.promotion_id", promotionId).order("recorded_at", { ascending: true });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
   // -- PRODUCTS ----------------------------------------------
   listProducts: async () => {
     const { data, error } = await supabase.from("products").select("*").order("brand").order("name");
@@ -352,6 +395,35 @@ var SupabaseAPI = {
     const { data, error } = await supabase.from("promotion_products").select("ean, products:ean (ean, brand, name, category, price, image_url)").eq("promotion_id", promotionId);
     if (error) throw new Error(error.message);
     return (data || []).map((row) => row.products).filter(Boolean);
+  },
+  // Upsert a single product (by EAN). Used when a promoter or manager
+  // adds a brand-new SKU on the fly — keeps the products table in sync
+  // so subsequent reads (and price aggregation) find the row.
+  upsertProduct: async (p) => {
+    const row = {
+      ean: String(p.ean || "").trim(),
+      brand: String(p.brand || "").trim(),
+      name: String(p.name || "").trim(),
+      category: p.category ? String(p.category).trim() : null,
+      // Schema column is `price` (numeric). Accept either `price` or
+      // `priceEur` from callers since the local catalog uses priceEur.
+      price: p.price != null ? Number(p.price) : p.priceEur != null ? Number(p.priceEur) : null
+    };
+    if (!row.ean || !row.brand || !row.name) throw new Error("ean, brand, and name are required");
+    const { data, error } = await supabase.from("products").upsert(row, { onConflict: "ean" }).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  // Add a SKU to a promotion's product list (idempotent — composite PK).
+  addPromotionProduct: async (promotionId, ean) => {
+    const { data, error } = await supabase.from("promotion_products").upsert({ promotion_id: promotionId, ean: String(ean).trim() }, { onConflict: "promotion_id,ean" }).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  removePromotionProduct: async (promotionId, ean) => {
+    const { error } = await supabase.from("promotion_products").delete().eq("promotion_id", promotionId).eq("ean", String(ean).trim());
+    if (error) throw new Error(error.message);
+    return null;
   },
   // -- SALES (pilot write path; UI hooks can call this directly later) ----
   recordSale: async (shiftId, ean, units = 1, unitPrice = null) => {
@@ -404,12 +476,6 @@ var SupabaseAPI = {
   },
   recordFeedbackNote: async (shiftId, kind, text, lostRevenueEur = null) => {
     const { data, error } = await supabase.from("feedback_notes").insert({ shift_id: shiftId, kind, text, lost_revenue_eur: lostRevenueEur }).select().single();
-    if (error) throw new Error(error.message);
-    return data;
-  },
-  // -- CUSTOM QUESTION ANSWERS (write) ------------------------
-  recordCustomAnswer: async (questionId, shiftId, answer) => {
-    const { data, error } = await supabase.from("custom_question_answers").insert({ question_id: questionId, shift_id: shiftId, answer_json: { value: answer } }).select().single();
     if (error) throw new Error(error.message);
     return data;
   },
@@ -573,6 +639,41 @@ function usePromoterAssignments(promotionId) {
   } };
   return live;
 }
+function useProductsLive() {
+  const fetcher = useMemo(() => () => SupabaseAPI.listProducts(), []);
+  const live = useFalcon(fetcher, []);
+  if (DATA_SOURCE !== "supabase") return { data: null, loading: false, error: null, reload: () => {
+  } };
+  return live;
+}
+function usePromotionProductsLive(promotionId) {
+  const fetcher = useMemo(() => () => promotionId ? SupabaseAPI.listPromotionProducts(promotionId) : Promise.resolve([]), [promotionId]);
+  const live = useFalcon(fetcher, [promotionId]);
+  if (DATA_SOURCE !== "supabase") return { data: null, loading: false, error: null, reload: () => {
+  } };
+  return live;
+}
+function useCustomAnswersLive(promotionId) {
+  const fetcher = useMemo(() => () => promotionId ? SupabaseAPI.listCustomAnswers(promotionId) : Promise.resolve([]), [promotionId]);
+  const live = useFalcon(fetcher, [promotionId]);
+  if (DATA_SOURCE !== "supabase") return { data: null, loading: false, error: null, reload: () => {
+  } };
+  return live;
+}
+function normalizeSupabaseProduct(p) {
+  if (!p) return null;
+  return {
+    ean: p.ean,
+    name: p.name,
+    brand: p.brand,
+    category: p.category || "",
+    subcategory: p.subcategory || "",
+    size: p.size || "",
+    priceEur: p.price != null ? Number(p.price) : 0,
+    price: p.price != null ? Number(p.price) : 0,
+    promoFlag: !!p.promo_flag
+  };
+}
 function aggregateProductPerformance(sales, catalog) {
   const byEan = /* @__PURE__ */ new Map();
   for (const s of sales || []) {
@@ -657,16 +758,17 @@ function aggregateQuotes(notes) {
     clientVisible: true
   }));
 }
-function aggregateDailyRevenue(sales) {
+function aggregateDailyRevenue(sales, catalog) {
   const buckets = /* @__PURE__ */ new Map();
   for (const s of sales || []) {
-    const ts = s.occurred_at || s.created_at || s.sold_at;
+    const ts = s.recorded_at || s.occurred_at || s.created_at || s.sold_at || s.shifts && s.shifts.shift_date;
     if (!ts) continue;
     const d = new Date(ts);
     if (isNaN(d.getTime())) continue;
     const key = d.toISOString().slice(0, 10);
     const cur = buckets.get(key) || { day: d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" }), iso: key, revenue: 0, units: 0 };
-    const unitPrice = s.unit_price != null ? Number(s.unit_price) : 0;
+    const cat = (catalog || []).find((c) => c.ean === s.ean);
+    const unitPrice = s.unit_price != null ? Number(s.unit_price) : cat ? Number(cat.price || cat.priceEur || 0) : 0;
     cur.revenue += (s.units || 0) * unitPrice;
     cur.units += s.units || 0;
     buckets.set(key, cur);
@@ -1072,6 +1174,15 @@ function addProductToCatalog(p) {
   }
   reindexCatalog();
   publishCatalog();
+  if (DATA_SOURCE === "supabase") {
+    SupabaseAPI.upsertProduct({
+      ean: clean.ean,
+      brand: clean.brand,
+      name: clean.name,
+      category: clean.category,
+      price: clean.priceEur
+    }).catch((err) => addToast(`Product sync failed: ${err && err.message ? err.message : err}`, "rose"));
+  }
   return PRODUCT_CATALOG.find((x) => x.ean === clean.ean);
 }
 function heinemannSearchUrl(query) {
@@ -1195,11 +1306,20 @@ function getAssignedProducts(promoId) {
 function assignProductsToPromotion(promoId, eans) {
   promotionProductsStore = { ...promotionProductsStore, [promoId]: [...eans] };
   publishPromoProducts();
+  if (DATA_SOURCE === "supabase" && promoId) {
+    Promise.all(eans.map((ean) => SupabaseAPI.addPromotionProduct(promoId, ean).catch((e) => e))).then((results) => {
+      const errs = results.filter((r) => r instanceof Error);
+      if (errs.length) addToast(`Some promotion products did not sync (${errs.length})`, "amber");
+    });
+  }
 }
 function removeProductFromPromotion(promoId, ean) {
   const cur = promotionProductsStore[promoId] || [];
   promotionProductsStore = { ...promotionProductsStore, [promoId]: cur.filter((e) => e !== ean) };
   publishPromoProducts();
+  if (DATA_SOURCE === "supabase" && promoId && ean) {
+    SupabaseAPI.removePromotionProduct(promoId, ean).catch((err) => addToast(`Promotion product remove failed: ${err && err.message ? err.message : err}`, "rose"));
+  }
 }
 function usePromoProductsVersion() {
   const [v, setV] = useState(0);
@@ -2028,6 +2148,7 @@ function PromoterApp({ onExit, userEmail }) {
   const liveShift = useActiveShift(DATA_SOURCE === "supabase" ? userEmail : null, DATA_SOURCE === "supabase" ? promoId : null);
   const liveHero = useActivePromotionHero();
   const isLive = DATA_SOURCE === "supabase";
+  const { data: customQuestions } = useJobDynamicFields(promoId);
   const initialSales = isLive ? [] : [
     { id: 1, ean: "4047462001241", qty: 1, time: "10:24" },
     { id: 2, ean: "4047462001234", qty: 2, time: "11:02" },
@@ -2053,9 +2174,32 @@ function PromoterApp({ onExit, userEmail }) {
   const [customAnswers, setCustomAnswers] = useState(isLive ? {} : { Q1: 8, Q2: "100ml tester", Q3: "Positive on the mini sample." });
   const [submitted, setSubmitted] = useState(false);
   const displayName = liveShift.promoter && liveShift.promoter.name || (userEmail ? userEmail.split("@")[0] : null) || "there";
+  usePromoProductsVersion();
+  useCatalogVersion();
+  const { data: liveAssignedRaw } = usePromotionProductsLive(promoId);
+  const { data: liveAllProductsRaw } = useProductsLive();
+  const priceForEan = (ean) => {
+    const pickPrice = (p) => {
+      if (!p) return null;
+      const v = p.priceEur != null ? p.priceEur : p.price != null ? p.price : null;
+      return v == null ? null : Number(v);
+    };
+    if (isLive) {
+      const live = (liveAllProductsRaw || []).map(normalizeSupabaseProduct).filter(Boolean).find((p) => p.ean === ean);
+      if (live) return pickPrice(live);
+      const assigned = (liveAssignedRaw || []).map(normalizeSupabaseProduct).filter(Boolean).find((p) => p.ean === ean);
+      if (assigned) return pickPrice(assigned);
+    }
+    const assignedLocal = getAssignedProducts(promoId).find((p) => p.ean === ean);
+    if (assignedLocal) return pickPrice(assignedLocal);
+    const cat = findProductByEan(ean);
+    if (cat) return pickPrice(cat);
+    const legacy = PRODUCTS.find((p) => p.ean === ean);
+    return legacy ? pickPrice(legacy) : 0;
+  };
   const shiftRevenue = sales.reduce((acc, s) => {
-    const p = PRODUCTS.find((x) => x.ean === s.ean);
-    return acc + (p ? p.price * s.qty : 0);
+    const price = priceForEan(s.ean);
+    return acc + (price || 0) * s.qty;
   }, 0);
   const shiftUnits = sales.reduce((a, b) => a + b.qty, 0);
   return /* @__PURE__ */ React.createElement("div", { className: "min-h-screen bg-slate-100 flex flex-col items-center py-6 px-4" }, /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-5xl mb-4 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("button", { onClick: onExit, className: "inline-flex items-center text-sm text-slate-600 hover:text-slate-900" }, /* @__PURE__ */ React.createElement(ChevronLeft, { className: "w-4 h-4 mr-1" }), " Back to role picker"), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "Promoter view \xB7 phone-sized frame")), /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-sm bg-white rounded-3xl border-8 border-slate-900 shadow-xl overflow-hidden", style: { minHeight: "720px" } }, /* @__PURE__ */ React.createElement("div", { className: "bg-slate-900 text-white text-xs px-5 py-1.5 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "09:12"), /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "5G  \u2022\u2022\u2022")), screen === "student-home" && /* @__PURE__ */ React.createElement(
@@ -2080,6 +2224,7 @@ function PromoterApp({ onExit, userEmail }) {
       setFeedback,
       customAnswers,
       setCustomAnswers,
+      customQuestions: customQuestions || [],
       checklist,
       setChecklist,
       samples,
@@ -2192,16 +2337,17 @@ function TrackerTravel({ samples, setSamples }) {
 function SampleRow({ label, value, onChange }) {
   return /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between border border-slate-200 rounded-lg px-3 py-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-sm" }, label), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement("button", { onClick: () => onChange(Math.max(0, value - 1)), className: "w-7 h-7 rounded-full border border-slate-300 flex items-center justify-center" }, /* @__PURE__ */ React.createElement(Minus, { className: "w-3.5 h-3.5" })), /* @__PURE__ */ React.createElement("span", { className: "text-sm font-semibold w-6 text-center" }, value), /* @__PURE__ */ React.createElement("button", { onClick: () => onChange(value + 1), className: "w-7 h-7 rounded-full border border-slate-300 flex items-center justify-center" }, /* @__PURE__ */ React.createElement(Plus, { className: "w-3.5 h-3.5" }))));
 }
-function TrackerHome({ setScreen, shiftRevenue, shiftUnits, contacts, submitted, checklist, samples }) {
+function TrackerHome({ setScreen, shiftRevenue, shiftUnits, contacts, submitted, checklist, samples, customQuestions }) {
   const checklistDone = checklist.photo && checklist.stockConfirmed && checklist.briefingRead;
   const totalSamples = (samples.discoveryMini || 0) + (samples.bodyLotion || 0);
+  const qCount = (customQuestions || []).length;
   const items = [
     { id: "checklist", label: "Shift-start checklist", icon: ClipboardCheck, hint: checklistDone ? "Done \xB7 booth photo + stock OK" : "Open before serving first customer", tone: checklistDone ? "green" : "rose" },
     { id: "sales", label: "Product Sales", icon: ShoppingBag, hint: `${shiftUnits} units \xB7 ${fmtEUR(shiftRevenue)}`, tone: "blue" },
     { id: "contacts", label: "Customer Contacts", icon: Users, hint: `${contacts.total} contacts logged`, tone: "purple" },
     { id: "travel", label: "Samples dispensed", icon: Plane, hint: `${totalSamples} samples logged`, tone: "purple" },
     { id: "feedback", label: "Feedback & Insights", icon: MessageSquare, hint: "Non-purchase reasons \xB7 Lost revenue", tone: "amber" },
-    { id: "custom", label: "Client-specific Questions", icon: HelpCircle, hint: "3 questions configured", tone: "rose" }
+    { id: "custom", label: "Client-specific Questions", icon: HelpCircle, hint: qCount > 0 ? `${qCount} question${qCount === 1 ? "" : "s"} configured` : "No questions yet", tone: "rose" }
   ];
   return /* @__PURE__ */ React.createElement("div", { className: "px-5 py-5 space-y-4" }, /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-3 gap-2" }, /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-lg p-2.5" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase tracking-wide" }, "Units"), /* @__PURE__ */ React.createElement("div", { className: "text-lg font-semibold" }, shiftUnits)), /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-lg p-2.5" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase tracking-wide" }, "Revenue"), /* @__PURE__ */ React.createElement("div", { className: "text-lg font-semibold" }, fmtEUR(shiftRevenue))), /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-lg p-2.5" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase tracking-wide" }, "Contacts"), /* @__PURE__ */ React.createElement("div", { className: "text-lg font-semibold" }, contacts.total))), /* @__PURE__ */ React.createElement("div", { className: "text-xs font-semibold uppercase tracking-wide text-slate-500" }, "Log during your shift"), /* @__PURE__ */ React.createElement("div", { className: "space-y-2" }, items.map((it) => {
     const Icon = it.icon;
@@ -2239,16 +2385,42 @@ function TrackerSales({ setScreen, sales, setSales, shiftId, shiftError, shiftLo
   const promoId = useActivePromotionId();
   usePromoProductsVersion();
   useCatalogVersion();
-  const assigned = getAssignedProducts(promoId);
+  const { data: liveAssignedRaw } = usePromotionProductsLive(promoId);
+  const { data: liveAllProductsRaw } = useProductsLive();
+  const liveAssigned = useMemo(
+    () => (liveAssignedRaw || []).map(normalizeSupabaseProduct).filter(Boolean),
+    [liveAssignedRaw]
+  );
+  const liveAllProducts = useMemo(
+    () => (liveAllProductsRaw || []).map(normalizeSupabaseProduct).filter(Boolean),
+    [liveAllProductsRaw]
+  );
+  const localAssigned = getAssignedProducts(promoId);
+  const assigned = useMemo(() => {
+    if (DATA_SOURCE === "supabase") {
+      const byEan = /* @__PURE__ */ new Map();
+      for (const p of liveAssigned) byEan.set(p.ean, p);
+      for (const p of localAssigned) if (!byEan.has(p.ean)) byEan.set(p.ean, p);
+      return Array.from(byEan.values());
+    }
+    return localAssigned;
+  }, [liveAssigned, localAssigned.length, promoId]);
   const showAssigned = assigned.length > 0;
   const productInfo = (ean) => {
+    const pickPrice = (p) => {
+      if (!p) return null;
+      const v = p.priceEur != null ? p.priceEur : p.price != null ? p.price : null;
+      return v == null ? null : Number(v);
+    };
     const a = assigned.find((p) => p.ean === ean);
-    if (a) return { name: a.name, price: a.priceEur, brand: a.brand, size: a.size };
+    if (a) return { name: a.name, price: pickPrice(a), brand: a.brand || "", size: a.size || "" };
+    const live = liveAllProducts.find((p) => p.ean === ean);
+    if (live) return { name: live.name, price: pickPrice(live), brand: live.brand || "", size: live.size || "" };
     const c = findProductByEan(ean);
-    if (c) return { name: c.name, price: c.priceEur, brand: c.brand, size: c.size };
+    if (c) return { name: c.name, price: pickPrice(c), brand: c.brand || "", size: c.size || "" };
     const legacy = PRODUCTS.find((p) => p.ean === ean);
-    if (legacy) return { name: legacy.name, price: legacy.price, brand: "", size: "" };
-    return { name: "Unknown SKU", price: 0, brand: "", size: "" };
+    if (legacy) return { name: legacy.name, price: pickPrice(legacy), brand: "", size: "" };
+    return { name: "Unknown SKU", price: null, brand: "", size: "" };
   };
   const logSale = (ean, q = qty) => {
     setSales([...sales, { id: Date.now(), ean, qty: q, time: (/* @__PURE__ */ new Date()).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) }]);
@@ -2256,7 +2428,11 @@ function TrackerSales({ setScreen, sales, setSales, shiftId, shiftError, shiftLo
     setConfirmEan(null);
     if (DATA_SOURCE === "supabase" && shiftId) {
       const info = productInfo(ean);
-      SupabaseAPI.recordSale(shiftId, ean, q, info.price || null).catch((err) => addToast(`Sale sync failed: ${err && err.message ? err.message : err}`, "rose"));
+      const unitPriceToSend = info.price != null ? info.price : null;
+      if (unitPriceToSend == null) {
+        addToast("No price on file for this SKU \u2014 sale logged at \u20AC0", "amber");
+      }
+      SupabaseAPI.recordSale(shiftId, ean, q, unitPriceToSend).catch((err) => addToast(`Sale sync failed: ${err && err.message ? err.message : err}`, "rose"));
     } else if (DATA_SOURCE === "supabase" && !shiftId && !shiftLoading) {
       addToast("No active shift \u2014 sale saved locally only", "amber");
     }
@@ -2296,16 +2472,15 @@ function TrackerSales({ setScreen, sales, setSales, shiftId, shiftError, shiftLo
   )), /* @__PURE__ */ React.createElement("div", { className: "mt-1.5 text-[11px] text-slate-400 text-center" }, "Off-list SKUs are flagged in the manager's report so coverage gaps are visible.")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2" }, "Logged this shift"), sales.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-500 italic" }, "No sales yet."), /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, sales.map((s) => {
     const info = productInfo(s.ean);
     const offList = showAssigned && !assigned.find((x) => x.ean === s.ean);
-    return /* @__PURE__ */ React.createElement("div", { key: s.id, className: "flex items-center justify-between bg-slate-50 rounded-lg px-3 py-2 text-sm" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "font-medium truncate" }, info.name, offList && /* @__PURE__ */ React.createElement("span", { className: "ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded text-[10px] font-semibold" }, "OFF-LIST")), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, s.time, " \xB7 qty ", s.qty, " \xB7 ", s.ean)), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement("span", { className: "font-semibold" }, fmtEUR(info.price * s.qty)), /* @__PURE__ */ React.createElement("button", { onClick: () => removeSale(s.id), className: "text-slate-400 hover:text-rose-600" }, /* @__PURE__ */ React.createElement(X, { className: "w-4 h-4" }))));
-  }))), confirmEan && /* @__PURE__ */ React.createElement("div", { className: "fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50", onClick: () => setConfirmEan(null) }, /* @__PURE__ */ React.createElement("div", { className: "bg-white w-full max-w-sm rounded-t-2xl sm:rounded-2xl p-5", onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between mb-3" }, /* @__PURE__ */ React.createElement("h4", { className: "font-semibold" }, "Confirm sale"), /* @__PURE__ */ React.createElement("button", { onClick: () => setConfirmEan(null) }, /* @__PURE__ */ React.createElement(X, { className: "w-5 h-5 text-slate-500" }))), /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-lg p-3 mb-3" }, /* @__PURE__ */ React.createElement("div", { className: "font-semibold text-sm" }, productInfo(confirmEan).name), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 font-mono" }, confirmEan, " \xB7 ", fmtEUR(productInfo(confirmEan).price))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "Qty"), /* @__PURE__ */ React.createElement("button", { onClick: () => setQty(Math.max(1, qty - 1)), className: "w-8 h-8 rounded-full border border-slate-300 flex items-center justify-center" }, /* @__PURE__ */ React.createElement(Minus, { className: "w-4 h-4" })), /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold w-6 text-center" }, qty), /* @__PURE__ */ React.createElement("button", { onClick: () => setQty(qty + 1), className: "w-8 h-8 rounded-full border border-slate-300 flex items-center justify-center" }, /* @__PURE__ */ React.createElement(Plus, { className: "w-4 h-4" }))), /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React.createElement("div", { key: s.id, className: "flex items-center justify-between bg-slate-50 rounded-lg px-3 py-2 text-sm" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "font-medium truncate" }, info.name, offList && /* @__PURE__ */ React.createElement("span", { className: "ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded text-[10px] font-semibold" }, "OFF-LIST")), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, s.time, " \xB7 qty ", s.qty, " \xB7 ", s.ean)), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement("span", { className: "font-semibold" }, info.price != null ? fmtEUR(info.price * s.qty) : /* @__PURE__ */ React.createElement("span", { className: "text-amber-600", title: "No price on file" }, "\u20AC?")), /* @__PURE__ */ React.createElement("button", { onClick: () => removeSale(s.id), className: "text-slate-400 hover:text-rose-600" }, /* @__PURE__ */ React.createElement(X, { className: "w-4 h-4" }))));
+  }))), confirmEan && /* @__PURE__ */ React.createElement("div", { className: "fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50", onClick: () => setConfirmEan(null) }, /* @__PURE__ */ React.createElement("div", { className: "bg-white w-full max-w-sm rounded-t-2xl sm:rounded-2xl p-5", onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between mb-3" }, /* @__PURE__ */ React.createElement("h4", { className: "font-semibold" }, "Confirm sale"), /* @__PURE__ */ React.createElement("button", { onClick: () => setConfirmEan(null) }, /* @__PURE__ */ React.createElement(X, { className: "w-5 h-5 text-slate-500" }))), /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-lg p-3 mb-3" }, /* @__PURE__ */ React.createElement("div", { className: "font-semibold text-sm" }, productInfo(confirmEan).name), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 font-mono" }, confirmEan, " \xB7 ", productInfo(confirmEan).price != null ? fmtEUR(productInfo(confirmEan).price) : /* @__PURE__ */ React.createElement("span", { className: "text-amber-600" }, "\u20AC? (no price on file)"))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "Qty"), /* @__PURE__ */ React.createElement("button", { onClick: () => setQty(Math.max(1, qty - 1)), className: "w-8 h-8 rounded-full border border-slate-300 flex items-center justify-center" }, /* @__PURE__ */ React.createElement(Minus, { className: "w-4 h-4" })), /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold w-6 text-center" }, qty), /* @__PURE__ */ React.createElement("button", { onClick: () => setQty(qty + 1), className: "w-8 h-8 rounded-full border border-slate-300 flex items-center justify-center" }, /* @__PURE__ */ React.createElement(Plus, { className: "w-4 h-4" }))), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => logSale(confirmEan, qty),
       className: "mt-4 w-full bg-slate-900 hover:bg-slate-800 text-white rounded-lg py-2.5 font-medium"
     },
-    "Log sale (",
-    fmtEUR(productInfo(confirmEan).price * qty),
-    ")"
+    "Log sale ",
+    productInfo(confirmEan).price != null ? `(${fmtEUR(productInfo(confirmEan).price * qty)})` : ""
   ))), /* @__PURE__ */ React.createElement(
     ProductLookupModal,
     {
@@ -2453,8 +2628,9 @@ function TrackerFeedback({ feedback, setFeedback }) {
     }
   ));
 }
-function TrackerCustom({ customAnswers, setCustomAnswers }) {
-  const visibleQs = CUSTOM_QUESTIONS;
+function TrackerCustom({ customAnswers, setCustomAnswers, customQuestions }) {
+  const supaLive = DATA_SOURCE === "supabase";
+  const visibleQs = supaLive ? customQuestions || [] : CUSTOM_QUESTIONS;
   const [lookupOpen, setLookupOpen] = useState(false);
   const [lookupMode, setLookupMode] = useState("scan");
   const tagged = Array.isArray(customAnswers.__products) ? customAnswers.__products : [];
@@ -2467,23 +2643,47 @@ function TrackerCustom({ customAnswers, setCustomAnswers }) {
     addToast(`Tagged: ${p.brand} ${p.name}`, "green");
   };
   const removeTagged = (ean) => setCustomAnswers({ ...customAnswers, __products: tagged.filter((p) => p.ean !== ean) });
-  return /* @__PURE__ */ React.createElement("div", { className: "px-5 py-5 space-y-5" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", { className: "font-semibold" }, "Client-specific Questions"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-slate-500 mt-1" }, "Configured by your UCM manager for this promotion.")), visibleQs.map((q) => /* @__PURE__ */ React.createElement("div", { key: q.id }, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700 flex items-start gap-2" }, /* @__PURE__ */ React.createElement(Pill, { tone: "rose" }, q.id), /* @__PURE__ */ React.createElement("span", null, q.question)), q.type === "count" ? /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      type: "number",
-      value: customAnswers[q.id] ?? "",
-      onChange: (e) => setCustomAnswers({ ...customAnswers, [q.id]: parseInt(e.target.value) || 0 }),
-      className: "mt-1.5 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
-    }
-  ) : /* @__PURE__ */ React.createElement(
-    "textarea",
-    {
-      value: customAnswers[q.id] ?? "",
-      onChange: (e) => setCustomAnswers({ ...customAnswers, [q.id]: e.target.value }),
-      rows: 2,
-      className: "mt-1.5 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
-    }
-  ))), /* @__PURE__ */ React.createElement("div", { className: "border border-slate-200 rounded-xl p-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-medium inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Package, { className: "w-4 h-4 text-slate-600" }), " Tagged products this shift"), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-0.5" }, "Attach SKUs that drove conversions, complaints, or interest.")), /* @__PURE__ */ React.createElement("div", { className: "flex gap-1.5" }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
+  return /* @__PURE__ */ React.createElement("div", { className: "px-5 py-5 space-y-5" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", { className: "font-semibold" }, "Client-specific Questions"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-slate-500 mt-1" }, "Configured by your UCM manager for this promotion.")), visibleQs.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "border-2 border-dashed border-slate-200 rounded-lg py-6 px-4 text-center" }, /* @__PURE__ */ React.createElement(HelpCircle, { className: "w-7 h-7 mx-auto mb-2 text-slate-300" }), /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-500" }, "No client questions configured yet."), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-400 mt-1" }, 'Your manager can add them from the "Insights" tab.')), visibleQs.map((q, idx) => {
+    const shortId = q.id && /^Q\d+$/.test(String(q.id)) ? q.id : `Q${idx + 1}`;
+    const isNumeric = q.type === "count" || q.type === "number" || q.type === "rating_1_5";
+    const isBoolean = q.type === "boolean";
+    const choices = q.type === "multi_choice" && q.raw && Array.isArray(q.raw.choices) ? q.raw.choices : null;
+    return /* @__PURE__ */ React.createElement("div", { key: q.id }, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700 flex items-start gap-2" }, /* @__PURE__ */ React.createElement(Pill, { tone: "rose" }, shortId), /* @__PURE__ */ React.createElement("span", null, q.question)), isBoolean ? /* @__PURE__ */ React.createElement("div", { className: "mt-1.5 flex gap-2" }, ["yes", "no"].map((opt) => /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        key: opt,
+        type: "button",
+        onClick: () => setCustomAnswers({ ...customAnswers, [q.id]: opt }),
+        className: `flex-1 border rounded-lg px-3 py-2 text-sm capitalize ${customAnswers[q.id] === opt ? "bg-rose-50 border-rose-300 text-rose-700 font-medium" : "border-slate-300 text-slate-700"}`
+      },
+      opt
+    ))) : choices ? /* @__PURE__ */ React.createElement(
+      "select",
+      {
+        value: customAnswers[q.id] ?? "",
+        onChange: (e) => setCustomAnswers({ ...customAnswers, [q.id]: e.target.value }),
+        className: "mt-1.5 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+      },
+      /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 choose \u2014"),
+      choices.map((c) => /* @__PURE__ */ React.createElement("option", { key: c, value: c }, c))
+    ) : isNumeric ? /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "number",
+        value: customAnswers[q.id] ?? "",
+        onChange: (e) => setCustomAnswers({ ...customAnswers, [q.id]: parseInt(e.target.value) || 0 }),
+        className: "mt-1.5 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+      }
+    ) : /* @__PURE__ */ React.createElement(
+      "textarea",
+      {
+        value: customAnswers[q.id] ?? "",
+        onChange: (e) => setCustomAnswers({ ...customAnswers, [q.id]: e.target.value }),
+        rows: 2,
+        className: "mt-1.5 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+      }
+    ));
+  }), /* @__PURE__ */ React.createElement("div", { className: "border border-slate-200 rounded-xl p-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-medium inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Package, { className: "w-4 h-4 text-slate-600" }), " Tagged products this shift"), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-0.5" }, "Attach SKUs that drove conversions, complaints, or interest.")), /* @__PURE__ */ React.createElement("div", { className: "flex gap-1.5" }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
     setLookupMode("scan");
     setLookupOpen(true);
   }, className: "px-2.5 py-1.5 border border-blue-300 bg-blue-50 rounded-lg text-xs text-blue-700 font-medium inline-flex items-center gap-1" }, /* @__PURE__ */ React.createElement(ScanLine, { className: "w-3.5 h-3.5" }), " Scan"), /* @__PURE__ */ React.createElement("button", { onClick: () => {
@@ -2499,7 +2699,7 @@ function TrackerCustom({ customAnswers, setCustomAnswers }) {
     }
   ));
 }
-function TrackerSubmit({ setScreen, sales, contacts, feedback, customAnswers, shiftRevenue, shiftUnits, submitted, setSubmitted, shiftId }) {
+function TrackerSubmit({ setScreen, sales, contacts, feedback, customAnswers, customQuestions, shiftRevenue, shiftUnits, submitted, setSubmitted, shiftId }) {
   const [submitting, setSubmitting] = useState(false);
   const handleSubmit = async () => {
     if (DATA_SOURCE !== "supabase" || !shiftId) {
@@ -2520,6 +2720,12 @@ function TrackerSubmit({ setScreen, sales, contacts, feedback, customAnswers, sh
       }
       for (const reason of feedback.reasons || []) {
         writes.push(SupabaseAPI.recordFeedbackNote(shiftId, "non_purchase", reason, null));
+      }
+      for (const q of customQuestions || []) {
+        if (!q || !q.id) continue;
+        const v = customAnswers ? customAnswers[q.id] : void 0;
+        if (v === void 0 || v === null || v === "") continue;
+        writes.push(SupabaseAPI.recordCustomAnswer(shiftId, q.id, v, null));
       }
       await Promise.all(writes);
       await SupabaseAPI.updateShift(shiftId, { status: "submitted", end_time: (/* @__PURE__ */ new Date()).toISOString() });
@@ -2603,7 +2809,12 @@ function ManagerApp({ onExit, onPreviewClient }) {
     location: heroRaw && heroLoc.location || PROMOTION.location,
     startDate: heroRaw && formatPromoDate(heroRaw.start_date) || PROMOTION.startDate,
     endDate: heroRaw && formatPromoDate(heroRaw.end_date) || PROMOTION.endDate,
-    status: heroRaw && heroRaw.status || "active"
+    status: heroRaw && heroRaw.status || "active",
+    // target_revenue is the manager-editable revenue goal that drives the
+    // KPI row, target progress bar, and "% of target" labels. Pull from the
+    // live row when available; falls back to the demo constant only outside
+    // supabase mode so we never silently mix demo and live numbers.
+    targetRevenue: heroRaw && heroRaw.target_revenue != null ? Number(heroRaw.target_revenue) : DATA_SOURCE === "supabase" ? null : PROMOTION.targetRevenue
   };
   const visibleProjectList = projectList.filter((p) => {
     if (!p.raw) return true;
@@ -2767,6 +2978,7 @@ function EditPromotionModal({ open, onClose, promotion, onSaved }) {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [status, setStatus] = useState("active");
+  const [targetRevenue, setTargetRevenue] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   useEffect(() => {
@@ -2778,6 +2990,7 @@ function EditPromotionModal({ open, onClose, promotion, onSaved }) {
       setStartDate(promotion.start_date || "");
       setEndDate(promotion.end_date || "");
       setStatus(promotion.status || "active");
+      setTargetRevenue(promotion.target_revenue != null ? String(promotion.target_revenue) : "");
       setError(null);
     }
   }, [open, promotion]);
@@ -2789,6 +3002,12 @@ function EditPromotionModal({ open, onClose, promotion, onSaved }) {
     setSaving(true);
     setError(null);
     try {
+      const parsedTarget = targetRevenue.trim() === "" ? null : Number(targetRevenue);
+      if (parsedTarget != null && (!isFinite(parsedTarget) || parsedTarget < 0)) {
+        setError("Target revenue must be a positive number");
+        setSaving(false);
+        return;
+      }
       await SupabaseAPI.updatePromotion(promotion.id, {
         brand: brand.trim(),
         client: client.trim(),
@@ -2796,7 +3015,8 @@ function EditPromotionModal({ open, onClose, promotion, onSaved }) {
         note: note.trim() || null,
         start_date: startDate || null,
         end_date: endDate || null,
-        status
+        status,
+        target_revenue: parsedTarget
       });
       addToast("Promotion updated", "green");
       onSaved && onSaved();
@@ -2816,7 +3036,19 @@ function EditPromotionModal({ open, onClose, promotion, onSaved }) {
       size: "lg",
       footer: /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", { onClick: onClose, disabled: saving, className: "px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50" }, "Cancel"), /* @__PURE__ */ React.createElement("button", { onClick: save, disabled: saving || !brand.trim() || !client.trim(), className: "px-3 py-1.5 text-sm bg-slate-900 text-white rounded-lg hover:bg-slate-800 disabled:opacity-50 inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Save, { className: "w-3.5 h-3.5" }), saving ? "Saving\u2026" : "Save"))
     },
-    /* @__PURE__ */ React.createElement("div", { className: "space-y-4 text-sm" }, /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Brand ", /* @__PURE__ */ React.createElement("span", { className: "text-rose-500" }, "*")), /* @__PURE__ */ React.createElement("input", { type: "text", value: brand, onChange: (e) => setBrand(e.target.value), required: true, className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Client ", /* @__PURE__ */ React.createElement("span", { className: "text-rose-500" }, "*")), /* @__PURE__ */ React.createElement("input", { type: "text", value: client, onChange: (e) => setClient(e.target.value), required: true, className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Location"), /* @__PURE__ */ React.createElement("input", { type: "text", value: location, onChange: (e) => setLocation(e.target.value), placeholder: "e.g. Berlin BER \xB7 Terminal 1", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-3 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Start date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: startDate, onChange: (e) => setStartDate(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "End date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: endDate, onChange: (e) => setEndDate(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Status"), /* @__PURE__ */ React.createElement("select", { value: status, onChange: (e) => setStatus(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }, /* @__PURE__ */ React.createElement("option", { value: "active" }, "Active"), /* @__PURE__ */ React.createElement("option", { value: "paused" }, "Paused"), /* @__PURE__ */ React.createElement("option", { value: "done" }, "Done"), /* @__PURE__ */ React.createElement("option", { value: "archived" }, "Archived")))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Note"), /* @__PURE__ */ React.createElement("textarea", { value: note, onChange: (e) => setNote(e.target.value), rows: 2, className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), error && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2" }, error))
+    /* @__PURE__ */ React.createElement("div", { className: "space-y-4 text-sm" }, /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Brand ", /* @__PURE__ */ React.createElement("span", { className: "text-rose-500" }, "*")), /* @__PURE__ */ React.createElement("input", { type: "text", value: brand, onChange: (e) => setBrand(e.target.value), required: true, className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Client ", /* @__PURE__ */ React.createElement("span", { className: "text-rose-500" }, "*")), /* @__PURE__ */ React.createElement("input", { type: "text", value: client, onChange: (e) => setClient(e.target.value), required: true, className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Location"), /* @__PURE__ */ React.createElement("input", { type: "text", value: location, onChange: (e) => setLocation(e.target.value), placeholder: "e.g. Berlin BER \xB7 Terminal 1", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-3 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Start date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: startDate, onChange: (e) => setStartDate(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "End date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: endDate, onChange: (e) => setEndDate(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Status"), /* @__PURE__ */ React.createElement("select", { value: status, onChange: (e) => setStatus(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }, /* @__PURE__ */ React.createElement("option", { value: "active" }, "Active"), /* @__PURE__ */ React.createElement("option", { value: "paused" }, "Paused"), /* @__PURE__ */ React.createElement("option", { value: "done" }, "Done"), /* @__PURE__ */ React.createElement("option", { value: "archived" }, "Archived")))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Revenue target (\u20AC)"), /* @__PURE__ */ React.createElement("div", { className: "relative" }, /* @__PURE__ */ React.createElement("span", { className: "absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm" }, "\u20AC"), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "number",
+        inputMode: "decimal",
+        min: "0",
+        step: "100",
+        value: targetRevenue,
+        onChange: (e) => setTargetRevenue(e.target.value),
+        placeholder: "e.g. 42000",
+        className: "w-full border border-slate-200 rounded-lg pl-7 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900"
+      }
+    )), /* @__PURE__ */ React.createElement("div", { className: "text-[11px] text-slate-400 mt-1" }, 'Drives the "Target" KPI in the manager overview and client report. Leave blank to hide.')), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Note"), /* @__PURE__ */ React.createElement("textarea", { value: note, onChange: (e) => setNote(e.target.value), rows: 2, className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), error && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2" }, error))
   );
 }
 function CreatePromotionModal({ open, onClose, onSaved }) {
@@ -2828,6 +3060,7 @@ function CreatePromotionModal({ open, onClose, onSaved }) {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [status, setStatus] = useState("active");
+  const [targetRevenue, setTargetRevenue] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   useEffect(() => {
@@ -2842,6 +3075,7 @@ function CreatePromotionModal({ open, onClose, onSaved }) {
       setStartDate("");
       setEndDate("");
       setStatus("active");
+      setTargetRevenue("");
       setError(null);
     }
   }, [open]);
@@ -2850,6 +3084,12 @@ function CreatePromotionModal({ open, onClose, onSaved }) {
     setSaving(true);
     setError(null);
     try {
+      const parsedTarget = targetRevenue.trim() === "" ? null : Number(targetRevenue);
+      if (parsedTarget != null && (!isFinite(parsedTarget) || parsedTarget < 0)) {
+        setError("Target revenue must be a positive number");
+        setSaving(false);
+        return;
+      }
       const payload = {
         code: code.trim() || null,
         brand: brand.trim(),
@@ -2858,7 +3098,8 @@ function CreatePromotionModal({ open, onClose, onSaved }) {
         note: note.trim() || null,
         start_date: startDate || null,
         end_date: endDate || null,
-        status
+        status,
+        target_revenue: parsedTarget
       };
       const created = await SupabaseAPI.createPromotion(payload);
       addToast(`Promotion "${created.brand}" created`, "green");
@@ -2879,7 +3120,19 @@ function CreatePromotionModal({ open, onClose, onSaved }) {
       size: "lg",
       footer: /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", { onClick: onClose, disabled: saving, className: "px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50" }, "Cancel"), /* @__PURE__ */ React.createElement("button", { onClick: save, disabled: saving || !brand.trim() || !client.trim(), className: "px-3 py-1.5 text-sm bg-slate-900 text-white rounded-lg hover:bg-slate-800 disabled:opacity-50 inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Save, { className: "w-3.5 h-3.5" }), saving ? "Creating\u2026" : "Create"))
     },
-    /* @__PURE__ */ React.createElement("div", { className: "space-y-4 text-sm" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Code ", /* @__PURE__ */ React.createElement("span", { className: "text-slate-400" }, "(internal reference)")), /* @__PURE__ */ React.createElement("input", { type: "text", value: code, onChange: (e) => setCode(e.target.value), placeholder: "e.g. P-2026-07", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Brand ", /* @__PURE__ */ React.createElement("span", { className: "text-rose-500" }, "*")), /* @__PURE__ */ React.createElement("input", { type: "text", value: brand, onChange: (e) => setBrand(e.target.value), required: true, placeholder: "e.g. Chanel", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Client ", /* @__PURE__ */ React.createElement("span", { className: "text-rose-500" }, "*")), /* @__PURE__ */ React.createElement("input", { type: "text", value: client, onChange: (e) => setClient(e.target.value), required: true, placeholder: "e.g. Gebr. Heinemann", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Location"), /* @__PURE__ */ React.createElement("input", { type: "text", value: location, onChange: (e) => setLocation(e.target.value), placeholder: "e.g. Berlin BER \xB7 Terminal 1 \xB7 Heinemann Duty Free", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }), /* @__PURE__ */ React.createElement("div", { className: "text-[11px] text-slate-400 mt-1" }, 'Tip: use "Airport \xB7 Terminal \xB7 Booth" \u2014 the dashboard splits on " \xB7 " for the hero block.')), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-3 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Start date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: startDate, onChange: (e) => setStartDate(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "End date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: endDate, onChange: (e) => setEndDate(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Status"), /* @__PURE__ */ React.createElement("select", { value: status, onChange: (e) => setStatus(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }, /* @__PURE__ */ React.createElement("option", { value: "active" }, "Active"), /* @__PURE__ */ React.createElement("option", { value: "paused" }, "Paused"), /* @__PURE__ */ React.createElement("option", { value: "done" }, "Done"), /* @__PURE__ */ React.createElement("option", { value: "archived" }, "Archived")))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Note"), /* @__PURE__ */ React.createElement("textarea", { value: note, onChange: (e) => setNote(e.target.value), rows: 2, placeholder: "Short internal description, e.g. 'Chanel brand boutique pilot \u2014 BER'", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), error && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2" }, error), /* @__PURE__ */ React.createElement("div", { className: "text-[11px] text-slate-500 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2" }, "After creating, you can assign products, promoters and shifts from the Configuration tab."))
+    /* @__PURE__ */ React.createElement("div", { className: "space-y-4 text-sm" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Code ", /* @__PURE__ */ React.createElement("span", { className: "text-slate-400" }, "(internal reference)")), /* @__PURE__ */ React.createElement("input", { type: "text", value: code, onChange: (e) => setCode(e.target.value), placeholder: "e.g. P-2026-07", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Brand ", /* @__PURE__ */ React.createElement("span", { className: "text-rose-500" }, "*")), /* @__PURE__ */ React.createElement("input", { type: "text", value: brand, onChange: (e) => setBrand(e.target.value), required: true, placeholder: "e.g. Chanel", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Client ", /* @__PURE__ */ React.createElement("span", { className: "text-rose-500" }, "*")), /* @__PURE__ */ React.createElement("input", { type: "text", value: client, onChange: (e) => setClient(e.target.value), required: true, placeholder: "e.g. Gebr. Heinemann", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Location"), /* @__PURE__ */ React.createElement("input", { type: "text", value: location, onChange: (e) => setLocation(e.target.value), placeholder: "e.g. Berlin BER \xB7 Terminal 1 \xB7 Heinemann Duty Free", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }), /* @__PURE__ */ React.createElement("div", { className: "text-[11px] text-slate-400 mt-1" }, 'Tip: use "Airport \xB7 Terminal \xB7 Booth" \u2014 the dashboard splits on " \xB7 " for the hero block.')), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-3 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Start date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: startDate, onChange: (e) => setStartDate(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "End date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: endDate, onChange: (e) => setEndDate(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Status"), /* @__PURE__ */ React.createElement("select", { value: status, onChange: (e) => setStatus(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }, /* @__PURE__ */ React.createElement("option", { value: "active" }, "Active"), /* @__PURE__ */ React.createElement("option", { value: "paused" }, "Paused"), /* @__PURE__ */ React.createElement("option", { value: "done" }, "Done"), /* @__PURE__ */ React.createElement("option", { value: "archived" }, "Archived")))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Revenue target (\u20AC)"), /* @__PURE__ */ React.createElement("div", { className: "relative" }, /* @__PURE__ */ React.createElement("span", { className: "absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm" }, "\u20AC"), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "number",
+        inputMode: "decimal",
+        min: "0",
+        step: "100",
+        value: targetRevenue,
+        onChange: (e) => setTargetRevenue(e.target.value),
+        placeholder: "e.g. 42000",
+        className: "w-full border border-slate-200 rounded-lg pl-7 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900"
+      }
+    )), /* @__PURE__ */ React.createElement("div", { className: "text-[11px] text-slate-400 mt-1" }, 'Optional. Used to compute the "% of target" KPI on dashboards.')), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Note"), /* @__PURE__ */ React.createElement("textarea", { value: note, onChange: (e) => setNote(e.target.value), rows: 2, placeholder: "Short internal description, e.g. 'Chanel brand boutique pilot \u2014 BER'", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), error && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2" }, error), /* @__PURE__ */ React.createElement("div", { className: "text-[11px] text-slate-500 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2" }, "After creating, you can assign products, promoters and shifts from the Configuration tab."))
   );
 }
 function AssignPromoterModal({ open, onClose, promotionId, alreadyAssigned = [], onAssigned }) {
@@ -3062,8 +3315,16 @@ function ManagerOverview({ reminderSent = {}, onSendReminder = () => {
   const supaLive = DATA_SOURCE === "supabase";
   const isLive = supaLive && metrics && (metrics.sales || metrics.shifts);
   const target = hero && hero.targetRevenue || (supaLive ? 0 : PROMOTION.targetRevenue);
-  const liveTotals = isLive ? aggregateTotals(metrics.sales, metrics.shifts, metrics.notes, PRODUCT_CATALOG, target) : null;
-  const liveProducts = isLive ? aggregateProductPerformance(metrics.sales, PRODUCT_CATALOG) : null;
+  const { data: liveProductsRaw } = useProductsLive();
+  const productCatalog = useMemo(() => {
+    const merged = /* @__PURE__ */ new Map();
+    const live = (liveProductsRaw || []).map(normalizeSupabaseProduct).filter(Boolean);
+    for (const p of live) merged.set(p.ean, p);
+    for (const p of PRODUCT_CATALOG) if (!merged.has(p.ean)) merged.set(p.ean, p);
+    return Array.from(merged.values());
+  }, [liveProductsRaw]);
+  const liveTotals = isLive ? aggregateTotals(metrics.sales, metrics.shifts, metrics.notes, productCatalog, target) : null;
+  const liveProducts = isLive ? aggregateProductPerformance(metrics.sales, productCatalog) : null;
   const revenue = liveTotals ? liveTotals.revenue : supaLive ? 0 : totalRevenue;
   const units = liveTotals ? liveTotals.units : supaLive ? 0 : totalUnits;
   const contacts = liveTotals ? liveTotals.contacts : supaLive ? 0 : totalContacts;
@@ -3072,13 +3333,13 @@ function ManagerOverview({ reminderSent = {}, onSendReminder = () => {
   const pct = liveTotals ? Math.round(liveTotals.progress * 100) : supaLive ? 0 : Number(targetPct);
   const conv = liveTotals ? liveTotals.contacts > 0 ? (liveTotals.units / liveTotals.contacts * 100).toFixed(1) : "0.0" : supaLive ? "0.0" : conversionRate;
   return /* @__PURE__ */ React.createElement(React.Fragment, null, isLive && metrics.loading && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 italic" }, "Loading live metrics\u2026"), isLive && metrics.error && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Couldn't load live metrics: ", metrics.error), /* @__PURE__ */ React.createElement("button", { onClick: metrics.reload, className: "font-semibold hover:underline" }, "Retry")), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 md:grid-cols-5 gap-4" }, /* @__PURE__ */ React.createElement(StatCard, { label: "Revenue", value: fmtEUR(revenue), sub: `Target ${fmtEUR(target)}`, icon: Target, tone: "blue", trend: { up: true, label: `${pct}% of target` } }), /* @__PURE__ */ React.createElement(StatCard, { label: "Units sold", value: units, sub: `across ${productCount} SKUs`, icon: Package, tone: "purple" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Customer contacts", value: contacts, sub: "logged this promotion", icon: Users, tone: "green" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Conversion", value: `${conv}%`, sub: "units / contacts", icon: TrendingUp, tone: "amber" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Lost revenue (OOS)", value: fmtEUR(lostRev), sub: "estimated", icon: AlertTriangle, tone: "rose" })), /* @__PURE__ */ React.createElement(SectionCard, { title: "Target achievement" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-end justify-between mb-2" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-600" }, fmtEUR(revenue), " of ", fmtEUR(target)), /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold" }, pct, "%")), /* @__PURE__ */ React.createElement(ProgressBar, { pct, tone: pct >= 100 ? "green" : pct >= 75 ? "blue" : "amber" }), /* @__PURE__ */ React.createElement("div", { className: "mt-2 text-xs text-slate-500" }, Math.max(0, target - revenue) > 0 ? `${fmtEUR(target - revenue)} to go` : `Target exceeded by ${fmtEUR(revenue - target)}`)), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-3 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Daily revenue", className: "lg:col-span-2" }, /* @__PURE__ */ React.createElement("div", { className: "h-64" }, (() => {
-    const dailyData = isLive ? aggregateDailyRevenue(metrics.sales) : supaLive ? [] : DAILY_REVENUE;
+    const dailyData = isLive ? aggregateDailyRevenue(metrics.sales, productCatalog) : supaLive ? [] : DAILY_REVENUE;
     if (!dailyData || dailyData.length === 0) {
       return /* @__PURE__ */ React.createElement("div", { className: "h-full flex items-center justify-center text-sm text-slate-500 italic" }, "No sales recorded yet.");
     }
     return /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(AreaChart, { data: dailyData }, /* @__PURE__ */ React.createElement("defs", null, /* @__PURE__ */ React.createElement("linearGradient", { id: "rev", x1: "0", y1: "0", x2: "0", y2: "1" }, /* @__PURE__ */ React.createElement("stop", { offset: "0%", stopColor: "#1e40af", stopOpacity: 0.35 }), /* @__PURE__ */ React.createElement("stop", { offset: "100%", stopColor: "#1e40af", stopOpacity: 0 }))), /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9" }), /* @__PURE__ */ React.createElement(XAxis, { dataKey: "day", tick: { fontSize: 11 }, stroke: "#94a3b8" }), /* @__PURE__ */ React.createElement(YAxis, { tick: { fontSize: 11 }, stroke: "#94a3b8", tickFormatter: (v) => "\u20AC" + v }), /* @__PURE__ */ React.createElement(Tooltip, { formatter: (v) => fmtEUR(v), contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Area, { type: "monotone", dataKey: "revenue", stroke: "#1e40af", strokeWidth: 2, fill: "url(#rev)" })));
   })())), /* @__PURE__ */ React.createElement(SectionCard, { title: "Sales by promoter" }, /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, (() => {
-    const rows = isLive ? aggregatePromoterPerformance(metrics.sales, metrics.shifts, metrics.notes, PRODUCT_CATALOG) : supaLive ? [] : PROMOTER_PERFORMANCE;
+    const rows = isLive ? aggregatePromoterPerformance(metrics.sales, metrics.shifts, metrics.notes, productCatalog) : supaLive ? [] : PROMOTER_PERFORMANCE;
     if (!rows || rows.length === 0) {
       return /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-500 italic" }, "No promoter sales yet.");
     }
@@ -3107,9 +3368,17 @@ function ManagerOverview({ reminderSent = {}, onSendReminder = () => {
 function ManagerProducts({ metrics }) {
   const supaLive = DATA_SOURCE === "supabase";
   const isLive = supaLive && metrics && (metrics.sales || metrics.shifts);
-  const productRows = isLive ? aggregateProductPerformance(metrics.sales, PRODUCT_CATALOG) : supaLive ? [] : PRODUCT_PERFORMANCE;
-  const promoterRows = isLive ? aggregatePromoterPerformance(metrics.sales, metrics.shifts, metrics.notes, PRODUCT_CATALOG) : supaLive ? [] : PROMOTER_PERFORMANCE;
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, isLive && metrics.loading && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 italic" }, "Loading live product data\u2026"), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Sales by product" }, /* @__PURE__ */ React.createElement("div", { className: "h-64" }, productRows.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "h-full flex items-center justify-center text-sm text-slate-500 italic" }, "No sales tracked yet for this promotion.") : /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(BarChart, { data: productRows, layout: "vertical", margin: { left: 10 } }, /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9", horizontal: false }), /* @__PURE__ */ React.createElement(XAxis, { type: "number", tick: { fontSize: 11 }, stroke: "#94a3b8", tickFormatter: (v) => "\u20AC" + v }), /* @__PURE__ */ React.createElement(YAxis, { type: "category", dataKey: "name", width: 130, tick: { fontSize: 11 }, stroke: "#475569" }), /* @__PURE__ */ React.createElement(Tooltip, { formatter: (v) => fmtEUR(v), contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Bar, { dataKey: "revenue", fill: "#1e40af", radius: [0, 4, 4, 0] }))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Units sold by product" }, /* @__PURE__ */ React.createElement("div", { className: "h-64" }, productRows.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "h-full flex items-center justify-center text-sm text-slate-500 italic" }, "\u2014") : /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(BarChart, { data: productRows }, /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9" }), /* @__PURE__ */ React.createElement(XAxis, { dataKey: "name", tick: { fontSize: 10 }, stroke: "#94a3b8", interval: 0, angle: -15, textAnchor: "end", height: 60 }), /* @__PURE__ */ React.createElement(YAxis, { tick: { fontSize: 11 }, stroke: "#94a3b8" }), /* @__PURE__ */ React.createElement(Tooltip, { contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Bar, { dataKey: "units", fill: "#0891b2", radius: [4, 4, 0, 0] })))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Promoter leaderboard" }, /* @__PURE__ */ React.createElement("div", { className: "overflow-x-auto" }, /* @__PURE__ */ React.createElement("table", { className: "w-full text-sm" }, /* @__PURE__ */ React.createElement("thead", { className: "text-left text-xs text-slate-500 uppercase tracking-wide border-b border-slate-100" }, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { className: "py-2" }, "Promoter"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Units"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Revenue"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Contacts"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Conversion"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "\u20AC / contact"))), /* @__PURE__ */ React.createElement("tbody", null, promoterRows.length === 0 ? /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("td", { colSpan: 6, className: "py-4 text-center text-slate-500 italic" }, "No promoter data yet")) : promoterRows.map((p) => /* @__PURE__ */ React.createElement("tr", { key: p.id || p.name, className: "border-b border-slate-50 last:border-0" }, /* @__PURE__ */ React.createElement("td", { className: "py-2.5 font-medium" }, p.name), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, p.units), /* @__PURE__ */ React.createElement("td", { className: "text-right font-semibold" }, fmtEUR(p.revenue)), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, p.contacts), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, p.contacts > 0 ? (p.units / p.contacts * 100).toFixed(1) : "0.0", "%"), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, p.contacts > 0 ? fmtEUR(p.revenue / p.contacts) : "\u2014"))))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Product master", action: /* @__PURE__ */ React.createElement("button", { onClick: () => addToast("Opening EAN catalogue editor\u2026", "blue"), className: "text-xs font-medium text-blue-600 hover:underline" }, "Manage EAN list") }, /* @__PURE__ */ React.createElement("table", { className: "w-full text-sm" }, /* @__PURE__ */ React.createElement("thead", { className: "text-left text-xs text-slate-500 uppercase tracking-wide border-b border-slate-100" }, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { className: "py-2" }, "Product"), /* @__PURE__ */ React.createElement("th", null, "EAN"), /* @__PURE__ */ React.createElement("th", null, "Category"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Price"))), /* @__PURE__ */ React.createElement("tbody", null, PRODUCTS.map((p) => /* @__PURE__ */ React.createElement("tr", { key: p.ean, className: "border-b border-slate-50 last:border-0" }, /* @__PURE__ */ React.createElement("td", { className: "py-2.5 font-medium" }, p.name), /* @__PURE__ */ React.createElement("td", { className: "font-mono text-xs text-slate-600" }, p.ean), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(Pill, { tone: "slate" }, p.category)), /* @__PURE__ */ React.createElement("td", { className: "text-right font-semibold" }, fmtEUR(p.price))))))));
+  const { data: liveProductsRaw } = useProductsLive();
+  const productCatalog = useMemo(() => {
+    const merged = /* @__PURE__ */ new Map();
+    const live = (liveProductsRaw || []).map(normalizeSupabaseProduct).filter(Boolean);
+    for (const p of live) merged.set(p.ean, p);
+    for (const p of PRODUCT_CATALOG) if (!merged.has(p.ean)) merged.set(p.ean, p);
+    return Array.from(merged.values());
+  }, [liveProductsRaw]);
+  const productRows = isLive ? aggregateProductPerformance(metrics.sales, productCatalog) : supaLive ? [] : PRODUCT_PERFORMANCE;
+  const promoterRows = isLive ? aggregatePromoterPerformance(metrics.sales, metrics.shifts, metrics.notes, productCatalog) : supaLive ? [] : PROMOTER_PERFORMANCE;
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, isLive && metrics.loading && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 italic" }, "Loading live product data\u2026"), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Sales by product" }, /* @__PURE__ */ React.createElement("div", { className: "h-64" }, productRows.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "h-full flex items-center justify-center text-sm text-slate-500 italic" }, "No sales tracked yet for this promotion.") : /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(BarChart, { data: productRows, layout: "vertical", margin: { left: 10 } }, /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9", horizontal: false }), /* @__PURE__ */ React.createElement(XAxis, { type: "number", tick: { fontSize: 11 }, stroke: "#94a3b8", tickFormatter: (v) => "\u20AC" + v }), /* @__PURE__ */ React.createElement(YAxis, { type: "category", dataKey: "name", width: 130, tick: { fontSize: 11 }, stroke: "#475569" }), /* @__PURE__ */ React.createElement(Tooltip, { formatter: (v) => fmtEUR(v), contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Bar, { dataKey: "revenue", fill: "#1e40af", radius: [0, 4, 4, 0] }))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Units sold by product" }, /* @__PURE__ */ React.createElement("div", { className: "h-64" }, productRows.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "h-full flex items-center justify-center text-sm text-slate-500 italic" }, "\u2014") : /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(BarChart, { data: productRows }, /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9" }), /* @__PURE__ */ React.createElement(XAxis, { dataKey: "name", tick: { fontSize: 10 }, stroke: "#94a3b8", interval: 0, angle: -15, textAnchor: "end", height: 60 }), /* @__PURE__ */ React.createElement(YAxis, { tick: { fontSize: 11 }, stroke: "#94a3b8" }), /* @__PURE__ */ React.createElement(Tooltip, { contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Bar, { dataKey: "units", fill: "#0891b2", radius: [4, 4, 0, 0] })))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Promoter leaderboard" }, /* @__PURE__ */ React.createElement("div", { className: "overflow-x-auto" }, /* @__PURE__ */ React.createElement("table", { className: "w-full text-sm" }, /* @__PURE__ */ React.createElement("thead", { className: "text-left text-xs text-slate-500 uppercase tracking-wide border-b border-slate-100" }, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { className: "py-2" }, "Promoter"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Units"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Revenue"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Contacts"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Conversion"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "\u20AC / contact"))), /* @__PURE__ */ React.createElement("tbody", null, promoterRows.length === 0 ? /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("td", { colSpan: 6, className: "py-4 text-center text-slate-500 italic" }, "No promoter data yet")) : promoterRows.map((p) => /* @__PURE__ */ React.createElement("tr", { key: p.id || p.name, className: "border-b border-slate-50 last:border-0" }, /* @__PURE__ */ React.createElement("td", { className: "py-2.5 font-medium" }, p.name), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, p.units), /* @__PURE__ */ React.createElement("td", { className: "text-right font-semibold" }, fmtEUR(p.revenue)), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, p.contacts), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, p.contacts > 0 ? (p.units / p.contacts * 100).toFixed(1) : "0.0", "%"), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, p.contacts > 0 ? fmtEUR(p.revenue / p.contacts) : "\u2014"))))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Product master", action: /* @__PURE__ */ React.createElement("span", { className: "text-xs text-slate-400" }, (supaLive ? productCatalog : PRODUCTS).length, " SKUs") }, /* @__PURE__ */ React.createElement("table", { className: "w-full text-sm" }, /* @__PURE__ */ React.createElement("thead", { className: "text-left text-xs text-slate-500 uppercase tracking-wide border-b border-slate-100" }, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { className: "py-2" }, "Product"), /* @__PURE__ */ React.createElement("th", null, "EAN"), /* @__PURE__ */ React.createElement("th", null, "Category"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Price"))), /* @__PURE__ */ React.createElement("tbody", null, (supaLive ? productCatalog : PRODUCTS).length === 0 ? /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("td", { colSpan: 4, className: "py-4 text-center text-slate-500 italic" }, "No products in catalogue yet")) : (supaLive ? productCatalog : PRODUCTS).map((p) => /* @__PURE__ */ React.createElement("tr", { key: p.ean, className: "border-b border-slate-50 last:border-0" }, /* @__PURE__ */ React.createElement("td", { className: "py-2.5 font-medium" }, p.name), /* @__PURE__ */ React.createElement("td", { className: "font-mono text-xs text-slate-600" }, p.ean), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(Pill, { tone: "slate" }, p.category || "\u2014")), /* @__PURE__ */ React.createElement("td", { className: "text-right font-semibold" }, fmtEUR(p.priceEur != null ? p.priceEur : p.price || 0))))))));
 }
 function ManagerInsights({ metrics }) {
   const supaLive = DATA_SOURCE === "supabase";
@@ -3155,10 +3424,18 @@ function ManagerConfig({ activePromoId, activePromoLabel, activeProject, hero, o
     initials: (p.name || p.email || "?").split(/[\s@]/).map((w) => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()
   }));
   const unassign = async (promoterId, name) => {
-    if (!window.confirm(`Remove ${name} from this promotion? Their existing shifts and sales stay.`)) return;
     try {
-      await SupabaseAPI.unassignPromoter(activePromoId, promoterId);
-      addToast(`${name} removed from promotion`, "rose");
+      const sold = await SupabaseAPI.countPromoterSales(activePromoId, promoterId);
+      if (sold > 0) {
+        if (!window.confirm(`${name} has ${sold} sale${sold === 1 ? "" : "s"} on this promotion. Remove them from the assignment but keep their shifts and sales for reporting?`)) return;
+        await SupabaseAPI.unassignPromoter(activePromoId, promoterId);
+        addToast(`${name} removed \xB7 ${sold} sale${sold === 1 ? "" : "s"} preserved`, "rose");
+      } else {
+        if (!window.confirm(`Remove ${name} from this promotion? They have no recorded sales, so any empty shifts will also be deleted.`)) return;
+        const removedShifts = await SupabaseAPI.deleteEmptyShiftsForPromoter(activePromoId, promoterId);
+        await SupabaseAPI.unassignPromoter(activePromoId, promoterId);
+        addToast(`${name} removed${removedShifts > 0 ? ` \xB7 ${removedShifts} empty shift${removedShifts === 1 ? "" : "s"} cleaned up` : ""}`, "rose");
+      }
       reloadAssignments && reloadAssignments();
     } catch (err) {
       addToast(`Remove failed: ${err.message || err}`, "rose");
@@ -3353,15 +3630,17 @@ function QuestionForm({ draft, setDraft }) {
 function AlertsDropdown({ onClose, alertsRead = [], onMarkRead = () => {
 }, onMarkAll = () => {
 } }) {
-  const unreadCount = ALERTS.filter((a) => !alertsRead.includes(a.id)).length;
-  return /* @__PURE__ */ React.createElement("div", { className: "absolute right-0 top-11 w-96 bg-white border border-slate-200 rounded-xl shadow-xl z-40" }, /* @__PURE__ */ React.createElement("div", { className: "px-4 py-3 border-b border-slate-100 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold" }, "Alerts & notifications"), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, unreadCount, " unread of ", ALERTS.length)), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, unreadCount > 0 && /* @__PURE__ */ React.createElement("button", { onClick: () => {
+  const supaLive = DATA_SOURCE === "supabase";
+  const alertList = supaLive ? [] : ALERTS;
+  const unreadCount = alertList.filter((a) => !alertsRead.includes(a.id)).length;
+  return /* @__PURE__ */ React.createElement("div", { className: "absolute right-0 top-11 w-96 bg-white border border-slate-200 rounded-xl shadow-xl z-40" }, /* @__PURE__ */ React.createElement("div", { className: "px-4 py-3 border-b border-slate-100 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold" }, "Alerts & notifications"), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, unreadCount, " unread of ", alertList.length)), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, unreadCount > 0 && /* @__PURE__ */ React.createElement("button", { onClick: () => {
     onMarkAll();
     addToast("All alerts marked as read", "green");
-  }, className: "text-xs text-blue-600 hover:underline" }, "Mark all read"), /* @__PURE__ */ React.createElement("button", { onClick: onClose, className: "text-slate-400 hover:text-slate-700" }, /* @__PURE__ */ React.createElement(X, { className: "w-4 h-4" })))), /* @__PURE__ */ React.createElement("ul", { className: "max-h-96 overflow-auto divide-y divide-slate-100" }, ALERTS.map((a) => {
+  }, className: "text-xs text-blue-600 hover:underline" }, "Mark all read"), /* @__PURE__ */ React.createElement("button", { onClick: onClose, className: "text-slate-400 hover:text-slate-700" }, /* @__PURE__ */ React.createElement(X, { className: "w-4 h-4" })))), /* @__PURE__ */ React.createElement("ul", { className: "max-h-96 overflow-auto divide-y divide-slate-100" }, alertList.length === 0 ? /* @__PURE__ */ React.createElement("li", { className: "px-4 py-8 text-center text-sm text-slate-500 italic" }, "No alerts right now.") : alertList.map((a) => {
     const tone = a.level === "critical" ? "rose" : a.level === "warning" ? "amber" : "blue";
     const isRead = alertsRead.includes(a.id);
     return /* @__PURE__ */ React.createElement("li", { key: a.id, className: `px-4 py-3 hover:bg-slate-50 ${isRead ? "opacity-50" : ""}` }, /* @__PURE__ */ React.createElement("div", { className: "flex items-start gap-2 justify-between" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, { tone }, a.level), /* @__PURE__ */ React.createElement("span", { className: "text-xs text-slate-500" }, a.time)), !isRead && /* @__PURE__ */ React.createElement("button", { onClick: () => onMarkRead(a.id), className: "text-xs text-slate-500 hover:text-slate-900" }, "Mark read")), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-sm text-slate-800" }, a.msg));
-  })), /* @__PURE__ */ React.createElement("div", { className: "px-4 py-2.5 border-t border-slate-100 text-center" }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
+  })), !supaLive && /* @__PURE__ */ React.createElement("div", { className: "px-4 py-2.5 border-t border-slate-100 text-center" }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
     onClose();
     addToast("Opening alerts archive\u2026", "blue");
   }, className: "text-sm text-blue-600 font-medium hover:underline" }, "View all")));
@@ -3407,7 +3686,15 @@ function ManagerPromoters({ metrics, hero }) {
   const [messageText, setMessageText] = useState("");
   const supaLive = DATA_SOURCE === "supabase";
   const isLive = supaLive && metrics && (metrics.sales || metrics.shifts);
-  const liveRows = isLive ? aggregatePromoterPerformance(metrics.sales, metrics.shifts, metrics.notes, PRODUCT_CATALOG).map((p, i) => ({
+  const { data: liveProductsRaw } = useProductsLive();
+  const productCatalog = useMemo(() => {
+    const merged = /* @__PURE__ */ new Map();
+    const live = (liveProductsRaw || []).map(normalizeSupabaseProduct).filter(Boolean);
+    for (const p of live) merged.set(p.ean, p);
+    for (const p of PRODUCT_CATALOG) if (!merged.has(p.ean)) merged.set(p.ean, p);
+    return Array.from(merged.values());
+  }, [liveProductsRaw]);
+  const liveRows = isLive ? aggregatePromoterPerformance(metrics.sales, metrics.shifts, metrics.notes, productCatalog).map((p, i) => ({
     id: p.id,
     name: p.name,
     region: hero && hero.airport ? hero.airport : "\u2014",
@@ -3647,10 +3934,18 @@ function ClientReport({ onExit }) {
   const heroStart = isLive && raw.start_date ? formatPromoDate(raw.start_date) : supaLive ? null : PROMOTION.startDate;
   const heroEnd = isLive && raw.end_date ? formatPromoDate(raw.end_date) : supaLive ? null : PROMOTION.endDate;
   const heroTarget = isLive && raw.target_revenue ? Number(raw.target_revenue) : supaLive ? 0 : PROMOTION.targetRevenue;
-  const liveTotals = isLive && (liveSales || liveShifts || liveNotes) ? aggregateTotals(liveSales, liveShifts, liveNotes, PRODUCT_CATALOG, heroTarget) : null;
-  const liveProducts = isLive && liveSales ? aggregateProductPerformance(liveSales, PRODUCT_CATALOG) : null;
+  const { data: liveProductsRaw } = useProductsLive();
+  const productCatalog = useMemo(() => {
+    const merged = /* @__PURE__ */ new Map();
+    const live = (liveProductsRaw || []).map(normalizeSupabaseProduct).filter(Boolean);
+    for (const p of live) merged.set(p.ean, p);
+    for (const p of PRODUCT_CATALOG) if (!merged.has(p.ean)) merged.set(p.ean, p);
+    return Array.from(merged.values());
+  }, [liveProductsRaw]);
+  const liveTotals = isLive && (liveSales || liveShifts || liveNotes) ? aggregateTotals(liveSales, liveShifts, liveNotes, productCatalog, heroTarget) : null;
+  const liveProducts = isLive && liveSales ? aggregateProductPerformance(liveSales, productCatalog) : null;
   const liveClientQuotes = isLive && liveNotes ? aggregateQuotes(liveNotes) : null;
-  const liveDaily = isLive && liveSales ? aggregateDailyRevenue(liveSales) : null;
+  const liveDaily = isLive && liveSales ? aggregateDailyRevenue(liveSales, productCatalog) : null;
   const reportRevenue = liveTotals ? liveTotals.revenue : supaLive ? 0 : totalRevenue;
   const reportUnits = liveTotals ? liveTotals.units : supaLive ? 0 : totalUnits;
   const reportContacts = liveTotals ? liveTotals.contacts : supaLive ? 0 : totalContacts;
@@ -3658,7 +3953,31 @@ function ClientReport({ onExit }) {
   const reportTargetPct = reportTarget ? Math.min(100, Math.round(reportRevenue / reportTarget * 100)) : supaLive ? 0 : targetPct;
   const reportConversion = reportContacts > 0 ? Math.round(reportUnits / reportContacts * 100) : supaLive ? 0 : conversionRate;
   const visibleQuotes = liveClientQuotes && liveClientQuotes.length > 0 ? liveClientQuotes.map((q) => ({ quote: q.text, who: q.promoter ? `Recorded by ${q.promoter}` : "Recorded by promoter" })) : supaLive ? [] : QUOTES.filter((q) => q.clientVisible);
-  const visibleCustomQs = supaLive ? [] : CUSTOM_QUESTIONS.filter((q) => q.clientVisible);
+  const { data: liveCustomQuestions } = useJobDynamicFields(supaLive ? promoId : null);
+  const { data: liveAnswerRows } = useCustomAnswersLive(supaLive ? promoId : null);
+  const liveCustomQA = useMemo(() => {
+    if (!supaLive) return null;
+    const qs = (liveCustomQuestions || []).filter((q) => q.clientVisible);
+    if (qs.length === 0) return [];
+    const byQ = /* @__PURE__ */ new Map();
+    for (const q of qs) byQ.set(q.id, { id: q.id, question: q.question, type: q.type, answers: [] });
+    for (const a of liveAnswerRows || []) {
+      const qid = a.question_id;
+      if (!byQ.has(qid)) continue;
+      const raw2 = a.answer_json && Object.prototype.hasOwnProperty.call(a.answer_json, "value") ? a.answer_json.value : a.answer_json;
+      if (raw2 === void 0 || raw2 === null || raw2 === "") continue;
+      byQ.get(qid).answers.push(raw2);
+    }
+    return Array.from(byQ.values()).map((row) => {
+      const numeric = row.answers.every((v) => typeof v === "number" || typeof v === "string" && v !== "" && !isNaN(Number(v)));
+      if (numeric && row.answers.length > 0) {
+        const total = row.answers.reduce((acc, v) => acc + Number(v), 0);
+        return { id: row.id, question: row.question, response: `${total} (across ${row.answers.length} shift${row.answers.length === 1 ? "" : "s"})` };
+      }
+      return { id: row.id, question: row.question, response: row.answers.length > 0 ? row.answers.map(String).filter(Boolean).join(" \xB7 ") : "\u2014" };
+    });
+  }, [supaLive, liveCustomQuestions, liveAnswerRows]);
+  const visibleCustomQs = supaLive ? liveCustomQA || [] : CUSTOM_QUESTIONS.filter((q) => q.clientVisible);
   const topProducts = liveProducts && liveProducts.length > 0 ? liveProducts.slice(0, 3) : supaLive ? [] : [...PRODUCT_PERFORMANCE].sort((a, b) => b.revenue - a.revenue).slice(0, 3);
   const reportSkuCount = liveProducts ? liveProducts.length : supaLive ? 0 : PRODUCT_PERFORMANCE.length;
   const reportLostRev = supaLive ? 0 : totalLostRevenue;
@@ -3686,10 +4005,10 @@ function ClientReport({ onExit }) {
     const max = Math.max(...NON_PURCHASE_REASONS.map((x) => x.count));
     const pct = r.count / max * 100;
     return /* @__PURE__ */ React.createElement("li", { key: r.reason }, /* @__PURE__ */ React.createElement("div", { className: "flex justify-between text-sm mb-1" }, /* @__PURE__ */ React.createElement("span", { className: "text-slate-800" }, r.reason), /* @__PURE__ */ React.createElement("span", { className: "text-slate-600 font-medium" }, r.count)), /* @__PURE__ */ React.createElement(ProgressBar, { pct, tone: "amber" }));
-  }))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Out-of-stock products & lost opportunity" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-2" }, OUT_OF_STOCK.filter((o) => o.lostRevenue > 0).map((o) => /* @__PURE__ */ React.createElement("li", { key: o.product, className: "flex items-center justify-between text-sm border-b border-slate-100 pb-2 last:border-0" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, o.product), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, o.lostUnits, " units estimated lost")), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, fmtEUR(o.lostRevenue))))), /* @__PURE__ */ React.createElement("div", { className: "mt-3 text-xs text-slate-600" }, "Total estimated lost revenue: ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, fmtEUR(reportLostRev)), ". Addressing these gaps could materially lift the next campaign."))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Voice of the customer" }, visibleQuotes.length > 0 ? /* @__PURE__ */ React.createElement("div", { className: "grid sm:grid-cols-2 gap-4" }, visibleQuotes.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "bg-slate-50 rounded-xl p-4 border-l-4 border-amber-400" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm italic text-slate-800 leading-relaxed" }, '"', q.quote, '"'), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-2" }, q.who)))) : /* @__PURE__ */ React.createElement("div", { className: "py-6 text-center text-sm text-slate-500 italic" }, "No customer quotes recorded yet.")), !supaLive && visibleCustomQs.length > 0 && /* @__PURE__ */ React.createElement(SectionCard, { title: "Brand-specific insights" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-4" }, visibleCustomQs.map((q) => /* @__PURE__ */ React.createElement("li", { key: q.id }, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-medium text-slate-900" }, q.question), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-sm text-slate-700" }, String(q.response)))))), !supaLive && /* @__PURE__ */ React.createElement("div", { className: "bg-slate-900 text-white rounded-2xl p-6" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs uppercase tracking-wider text-slate-300 font-semibold" }, "Summary"), /* @__PURE__ */ React.createElement("h3", { className: "mt-2 text-xl font-semibold" }, "A strong start, with clear levers for the next campaign"), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Revenue at ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, targetPct, "%"), " of target with 4 days remaining."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Strongest pull from female travellers aged 35\u201344; floral notes resonate."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), " Sales clearly track the airport's long-haul departure waves \u2014 concentrate full staffing on the ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "12:00\u201313:00"), " and ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "17:00\u201319:00"), " banks."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " 100ml tester unavailability is the largest single loss \u2014 estimated ", fmtEUR(2322), " in missed sales."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " Price sensitivity is the second most common non-purchase reason \u2014 consider a bundle promotion for the next wave.")))), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-5xl mx-auto px-6 py-4 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Prepared by ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-700" }, "UCM"), " \xB7 Promotion Insights"), /* @__PURE__ */ React.createElement("span", null, "Report generated ", (/* @__PURE__ */ new Date()).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }), supaLive ? "" : " \xB7 Demo"))));
+  }))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Out-of-stock products & lost opportunity" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-2" }, OUT_OF_STOCK.filter((o) => o.lostRevenue > 0).map((o) => /* @__PURE__ */ React.createElement("li", { key: o.product, className: "flex items-center justify-between text-sm border-b border-slate-100 pb-2 last:border-0" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, o.product), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, o.lostUnits, " units estimated lost")), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, fmtEUR(o.lostRevenue))))), /* @__PURE__ */ React.createElement("div", { className: "mt-3 text-xs text-slate-600" }, "Total estimated lost revenue: ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, fmtEUR(reportLostRev)), ". Addressing these gaps could materially lift the next campaign."))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Voice of the customer" }, visibleQuotes.length > 0 ? /* @__PURE__ */ React.createElement("div", { className: "grid sm:grid-cols-2 gap-4" }, visibleQuotes.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "bg-slate-50 rounded-xl p-4 border-l-4 border-amber-400" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm italic text-slate-800 leading-relaxed" }, '"', q.quote, '"'), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-2" }, q.who)))) : /* @__PURE__ */ React.createElement("div", { className: "py-6 text-center text-sm text-slate-500 italic" }, "No customer quotes recorded yet.")), visibleCustomQs.length > 0 && /* @__PURE__ */ React.createElement(SectionCard, { title: "Brand-specific insights" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-4" }, visibleCustomQs.map((q) => /* @__PURE__ */ React.createElement("li", { key: q.id }, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-medium text-slate-900" }, q.question), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-sm text-slate-700" }, q.response != null ? String(q.response) : "\u2014"))))), supaLive && visibleCustomQs.length === 0 && liveCustomQuestions && liveCustomQuestions.filter((q) => q.clientVisible).length === 0 && null, !supaLive && /* @__PURE__ */ React.createElement("div", { className: "bg-slate-900 text-white rounded-2xl p-6" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs uppercase tracking-wider text-slate-300 font-semibold" }, "Summary"), /* @__PURE__ */ React.createElement("h3", { className: "mt-2 text-xl font-semibold" }, "A strong start, with clear levers for the next campaign"), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Revenue at ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, targetPct, "%"), " of target with 4 days remaining."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Strongest pull from female travellers aged 35\u201344; floral notes resonate."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), " Sales clearly track the airport's long-haul departure waves \u2014 concentrate full staffing on the ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "12:00\u201313:00"), " and ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "17:00\u201319:00"), " banks."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " 100ml tester unavailability is the largest single loss \u2014 estimated ", fmtEUR(2322), " in missed sales."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " Price sensitivity is the second most common non-purchase reason \u2014 consider a bundle promotion for the next wave.")))), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-5xl mx-auto px-6 py-4 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Prepared by ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-700" }, "UCM"), " \xB7 Promotion Insights"), /* @__PURE__ */ React.createElement("span", null, "Report generated ", (/* @__PURE__ */ new Date()).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }), supaLive ? "" : " \xB7 Demo"))));
 }
 
-// ../../tmp/ucm-entry-u4qo4uzmva8.jsx
+// ../../tmp/ucm-entry-i6nu7k6traj.jsx
 var root = createRoot(document.getElementById("root"));
 root.render(React2.createElement(App));
 

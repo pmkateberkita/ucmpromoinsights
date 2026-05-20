@@ -6,7 +6,7 @@
 <style>body { font-family: Inter, system-ui, sans-serif; background: #f8fafc; } .ucm-loading { display:flex; align-items:center; justify-content:center; height:100vh; color:#64748b; font-size: 14px; }</style>
 <script type="importmap">{ "imports": { "react": "https://esm.sh/react@18.3.1", "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime", "react-dom": "https://esm.sh/react-dom@18.3.1", "react-dom/client": "https://esm.sh/react-dom@18.3.1/client", "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react", "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom", "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.4" } }</script>
 </head><body><div id="root"><div class="ucm-loading">Loading UCM Promotion Insights…</div></div><script type="module">
-// ../../tmp/ucm-entry-i6nu7k6traj.jsx
+// ../../tmp/ucm-entry-ou4rd4sq7up.jsx
 import React2 from "react";
 import { createRoot } from "react-dom/client";
 
@@ -385,6 +385,51 @@ var SupabaseAPI = {
     if (error) throw new Error(error.message);
     return data || [];
   },
+  // -- PROMOTER MESSAGES -------------------------------------
+  // Persistent manager→promoter message bus.  Used when DATA_SOURCE
+  // is "supabase".  The in-memory bus is kept for demo mode.
+  listPromoterMessages: async (promoterId) => {
+    if (!promoterId) return [];
+    const { data, error } = await supabase.from("promoter_messages").select("id, promoter_id, promotion_id, from_name, body, read_at, created_at, promoter_message_replies(id, from_name, body, created_at)").eq("promoter_id", promoterId).order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+  listPromotionMessages: async (promotionId) => {
+    if (!promotionId) return [];
+    const { data, error } = await supabase.from("promoter_messages").select("id, promoter_id, promotion_id, from_name, body, read_at, created_at, promoter_message_replies(id, from_name, body, created_at)").eq("promotion_id", promotionId).order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+  sendPromoterMessage: async ({ promoterId, promotionId, fromName, body }) => {
+    if (!promoterId || !body) throw new Error("promoter_id and body are required");
+    const row = {
+      promoter_id: promoterId,
+      promotion_id: promotionId || null,
+      from_name: fromName || "UCM Manager",
+      body
+    };
+    const { data, error } = await supabase.from("promoter_messages").insert(row).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  markPromoterMessageRead: async (messageId) => {
+    if (!messageId) return null;
+    const { data, error } = await supabase.from("promoter_messages").update({ read_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", messageId).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  replyToPromoterMessage: async ({ messageId, fromName, body }) => {
+    if (!messageId || !body) throw new Error("message_id and body are required");
+    const row = {
+      message_id: messageId,
+      from_name: fromName || "Promoter",
+      body
+    };
+    const { data, error } = await supabase.from("promoter_message_replies").insert(row).select().single();
+    if (error) throw new Error(error.message);
+    await supabase.from("promoter_messages").update({ read_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", messageId).is("read_at", null);
+    return data;
+  },
   // -- PRODUCTS ----------------------------------------------
   listProducts: async () => {
     const { data, error } = await supabase.from("products").select("*").order("brand").order("name");
@@ -732,6 +777,7 @@ function aggregateGaps(shifts) {
       out.push({
         id: sh.id,
         promoter: sh.promoters && sh.promoters.name || sh.promoter_id,
+        promoterId: sh.promoter_id || null,
         date: sh.shift_date,
         status: sh.status,
         location: sh.location || "\u2014"
@@ -812,10 +858,10 @@ function useDashboardMetrics(promotionId) {
   return { shifts, sales, notes, loading, error, reload };
 }
 function useActiveShift(email, promotionId) {
-  const [state, setState] = useState({ shiftId: null, promoterId: null, promoter: null, loading: false, error: null });
+  const [state, setState] = useState({ shiftId: null, promoterId: null, promoter: null, promotionId: null, loading: false, error: null });
   useEffect(() => {
     if (DATA_SOURCE !== "supabase" || !email || !promotionId) {
-      setState({ shiftId: null, promoterId: null, promoter: null, loading: false, error: null });
+      setState({ shiftId: null, promoterId: null, promoter: null, promotionId: promotionId || null, loading: false, error: null });
       return;
     }
     let cancelled = false;
@@ -832,10 +878,10 @@ function useActiveShift(email, promotionId) {
         }
         const shift = await SupabaseAPI.findOrCreateActiveShift(promotionId, prom.id);
         if (cancelled) return;
-        setState({ shiftId: shift.id, promoterId: prom.id, promoter: prom, loading: false, error: null });
+        setState({ shiftId: shift.id, promoterId: prom.id, promoter: prom, promotionId, loading: false, error: null });
       } catch (err) {
         if (cancelled) return;
-        setState({ shiftId: null, promoterId: null, promoter: null, loading: false, error: err && err.message ? err.message : String(err) });
+        setState({ shiftId: null, promoterId: null, promoter: null, promotionId, loading: false, error: err && err.message ? err.message : String(err) });
       }
     })();
     return () => {
@@ -1051,12 +1097,12 @@ var HOURLY_SALES_TODAY = [
   { hour: "18", sales: 11, contacts: 52 },
   { hour: "19", sales: 7, contacts: 36 }
 ];
-var ALERTS = [
+var ALERTS = DATA_SOURCE === "demo" ? [
   { id: 1, level: "critical", time: "13 May, 09:12", msg: "No.5 EDP 100ml tester missing at BER T1 \u2014 \u20AC322 lost yesterday" },
   { id: 2, level: "warning", time: "13 May, 08:50", msg: "Aisha B. tracking 40% below expected pace this morning" },
   { id: 3, level: "warning", time: "12 May, 21:18", msg: "Daily report missing for Tom\xE1s \xC1. (02 May, Early shift)" },
   { id: 4, level: "info", time: "12 May, 14:02", msg: "Berlin BER Chanel pilot at 86% of target with 4 days remaining" }
-];
+] : [];
 var PROMOTER_RATINGS = [
   { id: "U-201", name: "Lena Schmidt", region: "Berlin BER", rank: 1, salesTotal: 286, convRate: 38.4, revenue: 28940, rating: "A", trend: 12, status: "above" },
   { id: "U-203", name: "Tom\xE1s \xC1lvarez", region: "Berlin BER", rank: 2, salesTotal: 248, convRate: 34.9, revenue: 24830, rating: "A", trend: 6, status: "above" },
@@ -1412,15 +1458,55 @@ function Toaster() {
     return /* @__PURE__ */ React.createElement("div", { key: t.id, className: `px-4 py-2.5 rounded-lg shadow-lg text-sm font-medium border ${toneClass} flex items-center gap-2` }, t.tone === "green" && /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4" }), t.tone === "rose" && /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4" }), /* @__PURE__ */ React.createElement("span", null, t.msg));
   }));
 }
-var promoterMessages = [
-  // seed one message so the demo shows the flow on first open
+var promoterMessages = DATA_SOURCE === "demo" ? [
   { id: 1, promoterId: "U-201", promoterName: "Lena Schmidt", from: "Julia K. (UCM Manager)", text: "Great pace this morning \u2014 keep going. Push the 100ml during the 12:30 GCC bank.", time: "09:42", read: false, replies: [] }
-];
+] : [];
 var messageSubscribers = [];
 function publishMessages() {
   messageSubscribers.forEach((fn) => fn(promoterMessages));
 }
-function sendPromoterMessage(promoter, text, from = "Julia K. (UCM Manager)") {
+function normaliseSupabaseMessage(row) {
+  if (!row) return null;
+  const created = row.created_at ? new Date(row.created_at) : /* @__PURE__ */ new Date();
+  const replies = (row.promoter_message_replies || []).map((r) => ({
+    id: r.id,
+    from: r.from_name,
+    text: r.body,
+    time: r.created_at ? new Date(r.created_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : ""
+  }));
+  return {
+    id: row.id,
+    promoterId: row.promoter_id,
+    promoterName: row.promoter_name || "",
+    promotionId: row.promotion_id || null,
+    from: row.from_name,
+    text: row.body,
+    time: created.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
+    read: !!row.read_at,
+    replies
+  };
+}
+async function sendPromoterMessage(promoter, text, from = "Julia K. (UCM Manager)", promotionId = null) {
+  if (DATA_SOURCE === "supabase") {
+    try {
+      const row = await SupabaseAPI.sendPromoterMessage({
+        promoterId: promoter.id,
+        promotionId,
+        fromName: from,
+        body: text
+      });
+      const msg2 = normaliseSupabaseMessage(row);
+      if (msg2) {
+        msg2.promoterName = promoter.name || "";
+        promoterMessages = [msg2, ...promoterMessages.filter((m) => m.id !== msg2.id)];
+        publishMessages();
+      }
+      return msg2;
+    } catch (e) {
+      addToast("Send failed: " + (e.message || "unknown error"), "rose");
+      return null;
+    }
+  }
   const msg = {
     id: Date.now() + Math.random(),
     promoterId: promoter.id,
@@ -1433,15 +1519,67 @@ function sendPromoterMessage(promoter, text, from = "Julia K. (UCM Manager)") {
   };
   promoterMessages = [msg, ...promoterMessages];
   publishMessages();
+  return msg;
 }
-function markMessageRead(id) {
+async function markMessageRead(id) {
+  if (DATA_SOURCE === "supabase") {
+    try {
+      await SupabaseAPI.markPromoterMessageRead(id);
+    } catch (e) {
+    }
+  }
   promoterMessages = promoterMessages.map((m) => m.id === id ? { ...m, read: true } : m);
   publishMessages();
 }
-function replyToMessage(id, text, from = "Lena Schmidt (Promoter)") {
+async function replyToMessage(id, text, from = "Lena Schmidt (Promoter)") {
+  if (DATA_SOURCE === "supabase") {
+    try {
+      const row = await SupabaseAPI.replyToPromoterMessage({ messageId: id, fromName: from, body: text });
+      const reply2 = {
+        id: row.id,
+        from: row.from_name,
+        text: row.body,
+        time: row.created_at ? new Date(row.created_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : (/* @__PURE__ */ new Date()).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+      };
+      promoterMessages = promoterMessages.map((m) => m.id === id ? { ...m, replies: [...m.replies || [], reply2], read: true } : m);
+      publishMessages();
+      return reply2;
+    } catch (e) {
+      addToast("Reply failed: " + (e.message || "unknown error"), "rose");
+      return null;
+    }
+  }
   const reply = { id: Date.now() + Math.random(), from, text, time: (/* @__PURE__ */ new Date()).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) };
   promoterMessages = promoterMessages.map((m) => m.id === id ? { ...m, replies: [...m.replies, reply], read: true } : m);
   publishMessages();
+  return reply;
+}
+async function loadPromoterMessages(promoterId, promoterName) {
+  if (DATA_SOURCE !== "supabase" || !promoterId) return;
+  try {
+    const rows = await SupabaseAPI.listPromoterMessages(promoterId);
+    const normalised = rows.map(normaliseSupabaseMessage).filter(Boolean);
+    if (promoterName) normalised.forEach((m) => {
+      m.promoterName = promoterName;
+    });
+    const others = promoterMessages.filter((m) => m.promoterId !== promoterId);
+    promoterMessages = [...normalised, ...others];
+    publishMessages();
+  } catch (e) {
+    if (typeof console !== "undefined") console.warn("loadPromoterMessages failed", e);
+  }
+}
+async function loadPromotionMessages(promotionId) {
+  if (DATA_SOURCE !== "supabase" || !promotionId) return;
+  try {
+    const rows = await SupabaseAPI.listPromotionMessages(promotionId);
+    const normalised = rows.map(normaliseSupabaseMessage).filter(Boolean);
+    const others = promoterMessages.filter((m) => m.promotionId !== promotionId);
+    promoterMessages = [...normalised, ...others];
+    publishMessages();
+  } catch (e) {
+    if (typeof console !== "undefined") console.warn("loadPromotionMessages failed", e);
+  }
 }
 function usePromoterMessages(filterPromoterId) {
   const [list, setList] = useState(promoterMessages);
@@ -1453,6 +1591,17 @@ function usePromoterMessages(filterPromoterId) {
   }, []);
   if (filterPromoterId === null || filterPromoterId === void 0) return [];
   return list.filter((m) => m.promoterId === filterPromoterId);
+}
+function usePromotionMessages(promotionId) {
+  const [list, setList] = useState(promoterMessages);
+  useEffect(() => {
+    messageSubscribers = [...messageSubscribers, setList];
+    return () => {
+      messageSubscribers = messageSubscribers.filter((f) => f !== setList);
+    };
+  }, []);
+  if (!promotionId) return list;
+  return list.filter((m) => m.promotionId === promotionId);
 }
 function downloadFile(filename, content, mime = "text/plain;charset=utf-8") {
   try {
@@ -2209,7 +2358,9 @@ function PromoterApp({ onExit, userEmail }) {
       displayName,
       hero: liveHero,
       shiftLoading: liveShift.loading,
-      shiftError: liveShift.error
+      shiftError: liveShift.error,
+      promoterId: liveShift.promoterId,
+      promotionId: liveShift.promotionId || liveHero && liveHero.id || null
     }
   ), screen.startsWith("tracker-") && /* @__PURE__ */ React.createElement(
     PromotionTracker,
@@ -2241,14 +2392,27 @@ function PromoterApp({ onExit, userEmail }) {
     }
   )), /* @__PURE__ */ React.createElement("div", { className: "mt-6 text-xs text-slate-500 max-w-sm text-center" }, "Tap ", /* @__PURE__ */ React.createElement("span", { className: "font-medium text-slate-700" }, "Open Promotion Tracker"), " on the Student App home to enter the new MVP flow. The Student App handles shifts; the Promotion Tracker captures sales & insights."));
 }
-function StudentHome({ onOpenTracker, displayName = "there", hero = null, shiftLoading = false, shiftError = null }) {
+function StudentHome({ onOpenTracker, displayName = "there", hero = null, shiftLoading = false, shiftError = null, promoterId = null, promotionId = null }) {
   const isLive = DATA_SOURCE === "supabase";
-  const PROMOTER_ID = isLive ? null : "U-201";
+  const PROMOTER_ID = isLive ? promoterId || null : "U-201";
   const messages = usePromoterMessages(PROMOTER_ID);
   const unread = messages.filter((m) => !m.read).length;
   const [inboxOpen, setInboxOpen] = useState(false);
   const [openMessageId, setOpenMessageId] = useState(null);
   const [replyText, setReplyText] = useState("");
+  useEffect(() => {
+    if (!isLive || !PROMOTER_ID) return void 0;
+    let cancelled = false;
+    const load = () => loadPromoterMessages(PROMOTER_ID, displayName);
+    load();
+    const t = setInterval(() => {
+      if (!cancelled) load();
+    }, 2e4);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [isLive, PROMOTER_ID, displayName]);
   const brand = isLive ? hero && hero.brand : PROMOTION.brand;
   const campaign = isLive ? hero && hero.campaign : PROMOTION.campaign;
   const client = isLive ? hero && hero.client : PROMOTION.client;
@@ -2779,8 +2943,32 @@ function ManagerApp({ onExit, onPreviewClient }) {
       if (next) setActivePromo(next.id);
     }
   }, [projectList.length]);
+  const activePromoRow = projectList.find((p) => p.id === activePromo) || null;
+  const activePromoUUID = activePromoRow && activePromoRow.raw && activePromoRow.raw.id || null;
+  useEffect(() => {
+    if (DATA_SOURCE !== "supabase" || !activePromoUUID) return void 0;
+    let cancelled = false;
+    const load = () => loadPromotionMessages(activePromoUUID);
+    load();
+    const t = setInterval(() => {
+      if (!cancelled) load();
+    }, 2e4);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [activePromoUUID]);
+  const promotionMessages = usePromotionMessages(activePromoUUID);
+  const unreadReplies = DATA_SOURCE === "supabase" ? promotionMessages.reduce((acc, m) => {
+    const replies = m.replies || [];
+    const lastReply = replies[replies.length - 1];
+    if (!lastReply) return acc;
+    const replyKey = `reply:${m.id}:${lastReply.id}`;
+    return alertsRead.includes(replyKey) ? acc : acc + 1;
+  }, 0) : 0;
   const unreadAlerts = ALERTS.filter((a) => !alertsRead.includes(a.id));
   const criticalAlerts = unreadAlerts.filter((a) => a.level === "critical").length;
+  const totalUnread = unreadAlerts.length + unreadReplies;
   const activePromoLabel = projectList.find((p) => p.id === activePromo) || projectList[0] || { brand: "\u2014", client: "\u2014", note: "" };
   const formatPromoDate = (d) => {
     if (!d) return null;
@@ -2802,6 +2990,10 @@ function ManagerApp({ onExit, onPreviewClient }) {
   const heroLoc = splitLocation(heroRaw && heroRaw.location);
   const hero = {
     id: heroRaw && heroRaw.code || PROMOTION.id,
+    // Supabase UUID for the promotion (when in live mode).  Lets child
+    // components attach messages, exports, etc. to the right promotion
+    // without us having to thread activePromoUUID through every prop.
+    uuid: activePromoUUID,
     brand: heroRaw && heroRaw.brand || PROMOTION.brand,
     campaign: heroRaw && heroRaw.note || PROMOTION.campaign,
     client: heroRaw && heroRaw.client || PROMOTION.client,
@@ -2826,7 +3018,27 @@ function ManagerApp({ onExit, onPreviewClient }) {
   const metrics = useDashboardMetrics(DATA_SOURCE === "supabase" ? activePromo : null);
   const markAlertRead = (id) => setAlertsRead((cur) => cur.includes(id) ? cur : [...cur, id]);
   const markAllAlertsRead = () => setAlertsRead(ALERTS.map((a) => a.id));
-  const sendReminder = (idx) => {
+  const sendReminder = async (idx, row) => {
+    const promoter = row && (row.promoterId || row.promoter_id) ? { id: row.promoterId || row.promoter_id, name: row.promoter || row.name || "Promoter" } : null;
+    const dateLabel = row && row.date ? row.date : "the missing shift";
+    const body = `Please submit your daily report for ${dateLabel} as soon as you can \u2014 let me know if you hit any blockers.`;
+    if (DATA_SOURCE === "supabase") {
+      if (!promoter || !promoter.id) {
+        addToast("Cannot send reminder: this row has no linked promoter", "rose");
+        return;
+      }
+      try {
+        await sendPromoterMessage(promoter, body, "UCM Manager", activePromoUUID);
+        setReminderSent({ ...reminderSent, [idx]: true });
+        addToast(`Reminder sent to ${promoter.name}`, "green");
+      } catch (e) {
+        addToast(`Send failed: ${e && e.message ? e.message : "unknown error"}`, "rose");
+      }
+      return;
+    }
+    if (promoter && promoter.id) {
+      await sendPromoterMessage(promoter, body);
+    }
     setReminderSent({ ...reminderSent, [idx]: true });
     addToast("Reminder sent to promoter", "green");
   };
@@ -2896,12 +3108,21 @@ function ManagerApp({ onExit, onPreviewClient }) {
     "button",
     {
       onClick: () => setAlertsOpen((open) => !open),
-      "aria-label": `Notifications (${criticalAlerts} critical, ${unreadAlerts.length} unread)`,
+      "aria-label": `Notifications (${criticalAlerts} critical, ${totalUnread} unread)`,
       className: `relative w-9 h-9 rounded-full flex items-center justify-center transition-colors ${alertsOpen ? "bg-slate-100" : "hover:bg-slate-100"}`
     },
     /* @__PURE__ */ React.createElement(Bell, { className: "w-5 h-5 text-slate-700" }),
-    unreadAlerts.length > 0 && /* @__PURE__ */ React.createElement("span", { className: `absolute top-1 right-1.5 min-w-[16px] h-4 px-1 rounded-full text-white text-[10px] flex items-center justify-center font-bold ${criticalAlerts > 0 ? "bg-rose-600" : "bg-blue-600"}` }, unreadAlerts.length)
-  ), alertsOpen && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "fixed inset-0 z-30", onClick: () => setAlertsOpen(false) }), /* @__PURE__ */ React.createElement(AlertsDropdown, { onClose: () => setAlertsOpen(false), alertsRead, onMarkRead: markAlertRead, onMarkAll: markAllAlertsRead }))), /* @__PURE__ */ React.createElement("div", { className: "w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center text-xs font-semibold" }, "JK"))), /* @__PURE__ */ React.createElement("div", { className: "max-w-7xl mx-auto px-6 pb-4" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-end justify-between flex-wrap gap-3" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, { tone: hero.status === "active" ? "blue" : hero.status === "paused" ? "amber" : hero.status === "done" ? "green" : "slate" }, hero.status === "active" ? "Active" : hero.status.charAt(0).toUpperCase() + hero.status.slice(1)), /* @__PURE__ */ React.createElement("span", { className: "text-xs text-slate-500" }, hero.id)), /* @__PURE__ */ React.createElement("h1", { className: "text-2xl font-bold tracking-tight mt-1" }, hero.brand, " \u2014 ", hero.campaign), /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-600 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1" }, /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1" }, /* @__PURE__ */ React.createElement(Building2, { className: "w-3.5 h-3.5" }), " ", hero.client), hero.airport && /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-3.5 h-3.5" }), " ", hero.airport), hero.location && /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1" }, /* @__PURE__ */ React.createElement(MapPin, { className: "w-3.5 h-3.5" }), " ", hero.location), /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1" }, /* @__PURE__ */ React.createElement(Calendar, { className: "w-3.5 h-3.5" }), " ", hero.startDate, " \u2192 ", hero.endDate))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement("button", { onClick: () => setBriefingOpen(true), className: "px-3 py-1.5 rounded-lg border border-slate-300 text-sm flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(FileText, { className: "w-4 h-4" }), " Briefing"), /* @__PURE__ */ React.createElement("button", { onClick: () => onPreviewClient && onPreviewClient(), className: "px-3 py-1.5 rounded-lg bg-slate-900 text-white text-sm flex items-center gap-1.5 hover:bg-slate-800" }, /* @__PURE__ */ React.createElement(Eye, { className: "w-4 h-4" }), " Preview client report"))), /* @__PURE__ */ React.createElement("div", { className: "mt-5 flex items-center gap-1 -mb-px overflow-x-auto" }, [
+    totalUnread > 0 && /* @__PURE__ */ React.createElement("span", { className: `absolute top-1 right-1.5 min-w-[16px] h-4 px-1 rounded-full text-white text-[10px] flex items-center justify-center font-bold ${criticalAlerts > 0 ? "bg-rose-600" : "bg-blue-600"}` }, totalUnread)
+  ), alertsOpen && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "fixed inset-0 z-30", onClick: () => setAlertsOpen(false) }), /* @__PURE__ */ React.createElement(
+    AlertsDropdown,
+    {
+      onClose: () => setAlertsOpen(false),
+      alertsRead,
+      onMarkRead: markAlertRead,
+      onMarkAll: markAllAlertsRead,
+      promotionMessages: DATA_SOURCE === "supabase" ? promotionMessages : []
+    }
+  ))), /* @__PURE__ */ React.createElement("div", { className: "w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center text-xs font-semibold" }, "JK"))), /* @__PURE__ */ React.createElement("div", { className: "max-w-7xl mx-auto px-6 pb-4" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-end justify-between flex-wrap gap-3" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, { tone: hero.status === "active" ? "blue" : hero.status === "paused" ? "amber" : hero.status === "done" ? "green" : "slate" }, hero.status === "active" ? "Active" : hero.status.charAt(0).toUpperCase() + hero.status.slice(1)), /* @__PURE__ */ React.createElement("span", { className: "text-xs text-slate-500" }, hero.id)), /* @__PURE__ */ React.createElement("h1", { className: "text-2xl font-bold tracking-tight mt-1" }, hero.brand, " \u2014 ", hero.campaign), /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-600 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1" }, /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1" }, /* @__PURE__ */ React.createElement(Building2, { className: "w-3.5 h-3.5" }), " ", hero.client), hero.airport && /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-3.5 h-3.5" }), " ", hero.airport), hero.location && /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1" }, /* @__PURE__ */ React.createElement(MapPin, { className: "w-3.5 h-3.5" }), " ", hero.location), /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1" }, /* @__PURE__ */ React.createElement(Calendar, { className: "w-3.5 h-3.5" }), " ", hero.startDate, " \u2192 ", hero.endDate))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement("button", { onClick: () => setBriefingOpen(true), className: "px-3 py-1.5 rounded-lg border border-slate-300 text-sm flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(FileText, { className: "w-4 h-4" }), " Briefing"), /* @__PURE__ */ React.createElement("button", { onClick: () => onPreviewClient && onPreviewClient(), className: "px-3 py-1.5 rounded-lg bg-slate-900 text-white text-sm flex items-center gap-1.5 hover:bg-slate-800" }, /* @__PURE__ */ React.createElement(Eye, { className: "w-4 h-4" }), " Preview client report"))), /* @__PURE__ */ React.createElement("div", { className: "mt-5 flex items-center gap-1 -mb-px overflow-x-auto" }, [
     { id: "overview", label: "Overview" },
     { id: "live", label: "Live Monitor" },
     { id: "promoters", label: "Promoters & Gaps" },
@@ -3354,7 +3575,7 @@ function ManagerOverview({ reminderSent = {}, onSendReminder = () => {
     const rows = liveGaps || (supaLive ? [] : MISSING_REPORTS);
     return /* @__PURE__ */ React.createElement(SectionCard, { title: "Missing daily reports", action: /* @__PURE__ */ React.createElement(Pill, { tone: rows.length > 0 ? "rose" : "green" }, rows.length) }, rows.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-500" }, "All daily reports submitted.") : /* @__PURE__ */ React.createElement("ul", { className: "space-y-2" }, rows.map((m, i) => {
       const sent = reminderSent[i];
-      return /* @__PURE__ */ React.createElement("li", { key: m.id || i, className: "flex items-center justify-between text-sm border border-slate-100 rounded-lg px-3 py-2" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, m.promoter), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, m.date, " \xB7 ", m.shift || m.status || "shift")), sent ? /* @__PURE__ */ React.createElement("span", { className: "text-xs font-medium text-emerald-600 inline-flex items-center gap-1" }, /* @__PURE__ */ React.createElement(Check, { className: "w-3.5 h-3.5" }), " Reminder sent") : /* @__PURE__ */ React.createElement("button", { onClick: () => onSendReminder(i), className: "text-xs font-medium text-blue-600 hover:underline" }, "Send reminder"));
+      return /* @__PURE__ */ React.createElement("li", { key: m.id || i, className: "flex items-center justify-between text-sm border border-slate-100 rounded-lg px-3 py-2" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, m.promoter), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, m.date, " \xB7 ", m.shift || m.status || "shift")), sent ? /* @__PURE__ */ React.createElement("span", { className: "text-xs font-medium text-emerald-600 inline-flex items-center gap-1" }, /* @__PURE__ */ React.createElement(Check, { className: "w-3.5 h-3.5" }), " Reminder sent") : /* @__PURE__ */ React.createElement("button", { onClick: () => onSendReminder(i, m), className: "text-xs font-medium text-blue-600 hover:underline" }, "Send reminder"));
     })));
   })(), /* @__PURE__ */ React.createElement(SectionCard, { title: "Customer quotes (selected)" }, (() => {
     const liveQuotes = isLive ? aggregateQuotes(metrics.notes).slice(0, 3) : null;
@@ -3629,18 +3850,39 @@ function QuestionForm({ draft, setDraft }) {
 }
 function AlertsDropdown({ onClose, alertsRead = [], onMarkRead = () => {
 }, onMarkAll = () => {
-} }) {
+}, promotionMessages = [] }) {
   const supaLive = DATA_SOURCE === "supabase";
   const alertList = supaLive ? [] : ALERTS;
-  const unreadCount = alertList.filter((a) => !alertsRead.includes(a.id)).length;
-  return /* @__PURE__ */ React.createElement("div", { className: "absolute right-0 top-11 w-96 bg-white border border-slate-200 rounded-xl shadow-xl z-40" }, /* @__PURE__ */ React.createElement("div", { className: "px-4 py-3 border-b border-slate-100 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold" }, "Alerts & notifications"), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, unreadCount, " unread of ", alertList.length)), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, unreadCount > 0 && /* @__PURE__ */ React.createElement("button", { onClick: () => {
+  const unreadAlertsCount = alertList.filter((a) => !alertsRead.includes(a.id)).length;
+  const replyItems = (supaLive ? promotionMessages : []).map((m) => {
+    const replies = m.replies || [];
+    const last = replies[replies.length - 1];
+    if (!last) return null;
+    const key = `reply:${m.id}:${last.id}`;
+    return {
+      key,
+      msgId: m.id,
+      promoterName: m.promoterName || "",
+      from: last.from || "Promoter",
+      text: last.text || "",
+      time: last.time || ""
+    };
+  }).filter(Boolean);
+  const unreadReplyCount = replyItems.filter((r) => !alertsRead.includes(r.key)).length;
+  const totalUnread = unreadAlertsCount + unreadReplyCount;
+  const totalCount = alertList.length + replyItems.length;
+  return /* @__PURE__ */ React.createElement("div", { className: "absolute right-0 top-11 w-96 bg-white border border-slate-200 rounded-xl shadow-xl z-40" }, /* @__PURE__ */ React.createElement("div", { className: "px-4 py-3 border-b border-slate-100 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold" }, "Alerts & notifications"), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, totalUnread, " unread of ", totalCount)), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, totalUnread > 0 && /* @__PURE__ */ React.createElement("button", { onClick: () => {
     onMarkAll();
+    replyItems.forEach((r) => onMarkRead(r.key));
     addToast("All alerts marked as read", "green");
-  }, className: "text-xs text-blue-600 hover:underline" }, "Mark all read"), /* @__PURE__ */ React.createElement("button", { onClick: onClose, className: "text-slate-400 hover:text-slate-700" }, /* @__PURE__ */ React.createElement(X, { className: "w-4 h-4" })))), /* @__PURE__ */ React.createElement("ul", { className: "max-h-96 overflow-auto divide-y divide-slate-100" }, alertList.length === 0 ? /* @__PURE__ */ React.createElement("li", { className: "px-4 py-8 text-center text-sm text-slate-500 italic" }, "No alerts right now.") : alertList.map((a) => {
+  }, className: "text-xs text-blue-600 hover:underline" }, "Mark all read"), /* @__PURE__ */ React.createElement("button", { onClick: onClose, className: "text-slate-400 hover:text-slate-700" }, /* @__PURE__ */ React.createElement(X, { className: "w-4 h-4" })))), /* @__PURE__ */ React.createElement("ul", { className: "max-h-96 overflow-auto divide-y divide-slate-100" }, totalCount === 0 ? /* @__PURE__ */ React.createElement("li", { className: "px-4 py-8 text-center text-sm text-slate-500 italic" }, "No alerts right now.") : /* @__PURE__ */ React.createElement(React.Fragment, null, replyItems.map((r) => {
+    const isRead = alertsRead.includes(r.key);
+    return /* @__PURE__ */ React.createElement("li", { key: r.key, className: `px-4 py-3 hover:bg-slate-50 ${isRead ? "opacity-50" : ""}` }, /* @__PURE__ */ React.createElement("div", { className: "flex items-start gap-2 justify-between" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, { tone: "blue" }, "reply"), /* @__PURE__ */ React.createElement("span", { className: "text-xs text-slate-500" }, r.time)), !isRead && /* @__PURE__ */ React.createElement("button", { onClick: () => onMarkRead(r.key), className: "text-xs text-slate-500 hover:text-slate-900" }, "Mark read")), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-sm text-slate-800" }, /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, r.promoterName || r.from), ": ", r.text));
+  }), alertList.map((a) => {
     const tone = a.level === "critical" ? "rose" : a.level === "warning" ? "amber" : "blue";
     const isRead = alertsRead.includes(a.id);
     return /* @__PURE__ */ React.createElement("li", { key: a.id, className: `px-4 py-3 hover:bg-slate-50 ${isRead ? "opacity-50" : ""}` }, /* @__PURE__ */ React.createElement("div", { className: "flex items-start gap-2 justify-between" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, { tone }, a.level), /* @__PURE__ */ React.createElement("span", { className: "text-xs text-slate-500" }, a.time)), !isRead && /* @__PURE__ */ React.createElement("button", { onClick: () => onMarkRead(a.id), className: "text-xs text-slate-500 hover:text-slate-900" }, "Mark read")), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-sm text-slate-800" }, a.msg));
-  })), !supaLive && /* @__PURE__ */ React.createElement("div", { className: "px-4 py-2.5 border-t border-slate-100 text-center" }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
+  }))), !supaLive && /* @__PURE__ */ React.createElement("div", { className: "px-4 py-2.5 border-t border-slate-100 text-center" }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
     onClose();
     addToast("Opening alerts archive\u2026", "blue");
   }, className: "text-sm text-blue-600 font-medium hover:underline" }, "View all")));
@@ -3713,12 +3955,22 @@ function ManagerPromoters({ metrics, hero }) {
     const matchesRegion = region === "all" || p.region === region;
     return matchesSearch && matchesRegion;
   }), [search, region, allRows]);
-  const sendMessage = () => {
+  const sendMessage = async () => {
     if (!messageText.trim()) {
       addToast("Message is empty", "rose");
       return;
     }
-    sendPromoterMessage(messaging, messageText.trim());
+    if (DATA_SOURCE === "supabase" && !(messaging && messaging.id)) {
+      addToast("Cannot send: this promoter has no Supabase id", "rose");
+      return;
+    }
+    const result = await sendPromoterMessage(
+      messaging,
+      messageText.trim(),
+      "UCM Manager",
+      hero && hero.uuid || null
+    );
+    if (DATA_SOURCE === "supabase" && !result) return;
     addToast(`Message sent to ${messaging.name}`, "green");
     setMessaging(null);
     setMessageText("");
@@ -4008,7 +4260,7 @@ function ClientReport({ onExit }) {
   }))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Out-of-stock products & lost opportunity" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-2" }, OUT_OF_STOCK.filter((o) => o.lostRevenue > 0).map((o) => /* @__PURE__ */ React.createElement("li", { key: o.product, className: "flex items-center justify-between text-sm border-b border-slate-100 pb-2 last:border-0" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, o.product), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, o.lostUnits, " units estimated lost")), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, fmtEUR(o.lostRevenue))))), /* @__PURE__ */ React.createElement("div", { className: "mt-3 text-xs text-slate-600" }, "Total estimated lost revenue: ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, fmtEUR(reportLostRev)), ". Addressing these gaps could materially lift the next campaign."))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Voice of the customer" }, visibleQuotes.length > 0 ? /* @__PURE__ */ React.createElement("div", { className: "grid sm:grid-cols-2 gap-4" }, visibleQuotes.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "bg-slate-50 rounded-xl p-4 border-l-4 border-amber-400" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm italic text-slate-800 leading-relaxed" }, '"', q.quote, '"'), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-2" }, q.who)))) : /* @__PURE__ */ React.createElement("div", { className: "py-6 text-center text-sm text-slate-500 italic" }, "No customer quotes recorded yet.")), visibleCustomQs.length > 0 && /* @__PURE__ */ React.createElement(SectionCard, { title: "Brand-specific insights" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-4" }, visibleCustomQs.map((q) => /* @__PURE__ */ React.createElement("li", { key: q.id }, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-medium text-slate-900" }, q.question), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-sm text-slate-700" }, q.response != null ? String(q.response) : "\u2014"))))), supaLive && visibleCustomQs.length === 0 && liveCustomQuestions && liveCustomQuestions.filter((q) => q.clientVisible).length === 0 && null, !supaLive && /* @__PURE__ */ React.createElement("div", { className: "bg-slate-900 text-white rounded-2xl p-6" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs uppercase tracking-wider text-slate-300 font-semibold" }, "Summary"), /* @__PURE__ */ React.createElement("h3", { className: "mt-2 text-xl font-semibold" }, "A strong start, with clear levers for the next campaign"), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Revenue at ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, targetPct, "%"), " of target with 4 days remaining."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Strongest pull from female travellers aged 35\u201344; floral notes resonate."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), " Sales clearly track the airport's long-haul departure waves \u2014 concentrate full staffing on the ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "12:00\u201313:00"), " and ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "17:00\u201319:00"), " banks."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " 100ml tester unavailability is the largest single loss \u2014 estimated ", fmtEUR(2322), " in missed sales."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " Price sensitivity is the second most common non-purchase reason \u2014 consider a bundle promotion for the next wave.")))), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-5xl mx-auto px-6 py-4 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Prepared by ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-700" }, "UCM"), " \xB7 Promotion Insights"), /* @__PURE__ */ React.createElement("span", null, "Report generated ", (/* @__PURE__ */ new Date()).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }), supaLive ? "" : " \xB7 Demo"))));
 }
 
-// ../../tmp/ucm-entry-i6nu7k6traj.jsx
+// ../../tmp/ucm-entry-ou4rd4sq7up.jsx
 var root = createRoot(document.getElementById("root"));
 root.render(React2.createElement(App));
 

@@ -6,11 +6,11 @@
 <style>body { font-family: Inter, system-ui, sans-serif; background: #f8fafc; } .ucm-loading { display:flex; align-items:center; justify-content:center; height:100vh; color:#64748b; font-size: 14px; }</style>
 <script type="importmap">{ "imports": { "react": "https://esm.sh/react@18.3.1", "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime", "react-dom": "https://esm.sh/react-dom@18.3.1", "react-dom/client": "https://esm.sh/react-dom@18.3.1/client", "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react", "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom", "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.4" } }</script>
 </head><body><div id="root"><div class="ucm-loading">Loading UCM Promotion Insights…</div></div><script type="module">
-// ../../../../tmp/ucm-entry-3u2gd0wicaz.jsx
+// ../../tmp/ucm-entry-t1fg4cwdksj.jsx
 import React2 from "react";
 import { createRoot } from "react-dom/client";
 
-// ucm-promotion-insights-prototype.jsx
+// mnt/UCM Promo/ucm-promotion-insights-prototype.jsx
 import React, { useState, useMemo, useEffect } from "react";
 import {
   ShoppingBag,
@@ -330,6 +330,68 @@ var SupabaseAPI = {
     const { data, error } = await supabase.from("sales").insert({ shift_id: shiftId, ean, units, unit_price: unitPrice }).select().single();
     if (error) throw new Error(error.message);
     return data;
+  },
+  // -- SHIFTS -------------------------------------------------
+  listShifts: async (promotionId) => {
+    let q = supabase.from("shifts").select("*, promoters(id, name, email, photo_url)");
+    if (promotionId) q = q.eq("promotion_id", promotionId);
+    const { data, error } = await q.order("shift_date", { ascending: false });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+  createShift: async (payload) => {
+    const { data, error } = await supabase.from("shifts").insert(payload).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  updateShift: async (id, patch) => {
+    const { data, error } = await supabase.from("shifts").update(patch).eq("id", id).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  findOrCreateActiveShift: async (promotionId, promoterId) => {
+    const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    const { data: existing, error: e1 } = await supabase.from("shifts").select("*").eq("promotion_id", promotionId).eq("promoter_id", promoterId).eq("shift_date", today).in("status", ["planned", "active"]).limit(1);
+    if (e1) throw new Error(e1.message);
+    if (existing && existing[0]) return existing[0];
+    const { data, error } = await supabase.from("shifts").insert({ promotion_id: promotionId, promoter_id: promoterId, shift_date: today, status: "active", start_time: (/* @__PURE__ */ new Date()).toISOString() }).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  // -- SALES (read) -------------------------------------------
+  listSales: async (promotionId) => {
+    let q = supabase.from("sales").select("*, shifts!inner(id, promoter_id, promotion_id, shift_date, promoters(id, name))");
+    if (promotionId) q = q.eq("shifts.promotion_id", promotionId);
+    const { data, error } = await q.order("recorded_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+  // -- FEEDBACK NOTES (read) ----------------------------------
+  listFeedbackNotes: async (promotionId) => {
+    let q = supabase.from("feedback_notes").select("*, shifts!inner(promotion_id, promoter_id, promoters(id, name))");
+    if (promotionId) q = q.eq("shifts.promotion_id", promotionId);
+    const { data, error } = await q.order("recorded_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+  recordFeedbackNote: async (shiftId, kind, text, lostRevenueEur = null) => {
+    const { data, error } = await supabase.from("feedback_notes").insert({ shift_id: shiftId, kind, text, lost_revenue_eur: lostRevenueEur }).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  // -- CUSTOM QUESTION ANSWERS (write) ------------------------
+  recordCustomAnswer: async (questionId, shiftId, answer) => {
+    const { data, error } = await supabase.from("custom_question_answers").insert({ question_id: questionId, shift_id: shiftId, answer_json: { value: answer } }).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  // -- PROMOTER ASSIGNMENTS -----------------------------------
+  listPromoterAssignments: async (promotionId) => {
+    let q = supabase.from("promoter_assignments").select("*, promoters(id, name, email, photo_url, active)");
+    if (promotionId) q = q.eq("promotion_id", promotionId);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    return data || [];
   }
 };
 function useFalcon(fetcher, deps) {
@@ -455,16 +517,192 @@ function useJobDynamicFields(jobUuid) {
   })) : null;
   return { data, loading: live.loading, error: live.error, reload: live.reload };
 }
+function useShifts(promotionId) {
+  const fetcher = useMemo(() => () => promotionId ? SupabaseAPI.listShifts(promotionId) : Promise.resolve([]), [promotionId]);
+  const live = useFalcon(fetcher, [promotionId]);
+  if (DATA_SOURCE !== "supabase") return { data: null, loading: false, error: null, reload: () => {
+  } };
+  return live;
+}
+function useSales(promotionId) {
+  const fetcher = useMemo(() => () => promotionId ? SupabaseAPI.listSales(promotionId) : Promise.resolve([]), [promotionId]);
+  const live = useFalcon(fetcher, [promotionId]);
+  if (DATA_SOURCE !== "supabase") return { data: null, loading: false, error: null, reload: () => {
+  } };
+  return live;
+}
+function useFeedbackNotes(promotionId) {
+  const fetcher = useMemo(() => () => promotionId ? SupabaseAPI.listFeedbackNotes(promotionId) : Promise.resolve([]), [promotionId]);
+  const live = useFalcon(fetcher, [promotionId]);
+  if (DATA_SOURCE !== "supabase") return { data: null, loading: false, error: null, reload: () => {
+  } };
+  return live;
+}
+function aggregateProductPerformance(sales, catalog) {
+  const byEan = /* @__PURE__ */ new Map();
+  for (const s of sales || []) {
+    const cat = (catalog || []).find((c) => c.ean === s.ean);
+    const unitPrice = s.unit_price != null ? Number(s.unit_price) : cat ? Number(cat.price || cat.priceEur || 0) : 0;
+    const name = cat ? cat.name : s.ean;
+    const row = byEan.get(s.ean) || { ean: s.ean, name, units: 0, revenue: 0 };
+    row.units += s.units || 0;
+    row.revenue += (s.units || 0) * unitPrice;
+    byEan.set(s.ean, row);
+  }
+  return Array.from(byEan.values()).sort((a, b) => b.revenue - a.revenue);
+}
+function aggregatePromoterPerformance(sales, shifts, notes, catalog) {
+  const byPromoter = /* @__PURE__ */ new Map();
+  for (const sh of shifts || []) {
+    const id = sh.promoter_id;
+    const name = sh.promoters && sh.promoters.name || id;
+    if (!byPromoter.has(id)) byPromoter.set(id, { id, name, units: 0, revenue: 0, contacts: 0, shifts: 0 });
+    byPromoter.get(id).shifts += 1;
+  }
+  for (const s of sales || []) {
+    const sh = s.shifts || {};
+    const id = sh.promoter_id;
+    if (!id) continue;
+    const cat = (catalog || []).find((c) => c.ean === s.ean);
+    const unitPrice = s.unit_price != null ? Number(s.unit_price) : cat ? Number(cat.price || cat.priceEur || 0) : 0;
+    if (!byPromoter.has(id)) {
+      const name = sh.promoters && sh.promoters.name || id;
+      byPromoter.set(id, { id, name, units: 0, revenue: 0, contacts: 0, shifts: 0 });
+    }
+    const row = byPromoter.get(id);
+    row.units += s.units || 0;
+    row.revenue += (s.units || 0) * unitPrice;
+  }
+  for (const n of notes || []) {
+    const sh = n.shifts || {};
+    const id = sh.promoter_id;
+    if (id && byPromoter.has(id)) byPromoter.get(id).contacts += 1;
+  }
+  return Array.from(byPromoter.values()).map((r) => ({
+    ...r,
+    conversion: r.contacts > 0 ? r.units / r.contacts : 0,
+    revPerContact: r.contacts > 0 ? r.revenue / r.contacts : 0
+  })).sort((a, b) => b.revenue - a.revenue);
+}
+function aggregateGaps(shifts) {
+  const today = /* @__PURE__ */ new Date();
+  today.setHours(0, 0, 0, 0);
+  const out = [];
+  for (const sh of shifts || []) {
+    const d = sh.shift_date ? /* @__PURE__ */ new Date(sh.shift_date + "T00:00:00") : null;
+    if (!d) continue;
+    const submitted = sh.status === "submitted" || sh.status === "approved";
+    if (!submitted && d < today) {
+      out.push({
+        id: sh.id,
+        promoter: sh.promoters && sh.promoters.name || sh.promoter_id,
+        date: sh.shift_date,
+        status: sh.status,
+        location: sh.location || "\u2014"
+      });
+    }
+  }
+  return out;
+}
+function aggregateLive(shifts) {
+  return (shifts || []).filter((sh) => sh.status === "active").map((sh) => ({
+    id: sh.id,
+    name: sh.promoters && sh.promoters.name || sh.promoter_id,
+    initials: (sh.promoters && sh.promoters.name || "?? ").split(" ").map((w) => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase(),
+    cluster: sh.location || "\u2014",
+    booth: sh.booth || "",
+    status: "on-track"
+  }));
+}
+function aggregateQuotes(notes) {
+  return (notes || []).filter((n) => n.kind === "quote" && n.text).map((n, i) => ({
+    id: i + 1,
+    text: n.text,
+    promoter: n.shifts && n.shifts.promoters && n.shifts.promoters.name || "\u2014",
+    clientVisible: true
+  }));
+}
+function aggregateTotals(sales, shifts, notes, catalog, targetRevenue) {
+  let revenue = 0, units = 0;
+  for (const s of sales || []) {
+    const cat = (catalog || []).find((c) => c.ean === s.ean);
+    const unitPrice = s.unit_price != null ? Number(s.unit_price) : cat ? Number(cat.price || cat.priceEur || 0) : 0;
+    revenue += (s.units || 0) * unitPrice;
+    units += s.units || 0;
+  }
+  const contacts = (notes || []).length;
+  const lostRevenue = (notes || []).reduce((acc, n) => acc + Number(n.lost_revenue_eur || 0), 0);
+  const submittedShifts = (shifts || []).filter((s) => s.status === "submitted" || s.status === "approved").length;
+  const totalShifts = (shifts || []).length;
+  return {
+    revenue,
+    units,
+    contacts,
+    lostRevenue,
+    submittedShifts,
+    totalShifts,
+    targetRevenue: targetRevenue || 0,
+    progress: targetRevenue ? revenue / targetRevenue : 0
+  };
+}
+function useDashboardMetrics(promotionId) {
+  const { data: shifts, loading: sLoad, error: sErr, reload: rShifts } = useShifts(promotionId);
+  const { data: sales, loading: lLoad, error: lErr, reload: rSales } = useSales(promotionId);
+  const { data: notes, loading: nLoad, error: nErr, reload: rNotes } = useFeedbackNotes(promotionId);
+  const reload = () => {
+    rShifts && rShifts();
+    rSales && rSales();
+    rNotes && rNotes();
+  };
+  const loading = sLoad || lLoad || nLoad;
+  const error = sErr || lErr || nErr;
+  return { shifts, sales, notes, loading, error, reload };
+}
+function useActiveShift(email, promotionId) {
+  const [state, setState] = useState({ shiftId: null, promoterId: null, loading: false, error: null });
+  useEffect(() => {
+    if (DATA_SOURCE !== "supabase" || !email || !promotionId) {
+      setState({ shiftId: null, promoterId: null, loading: false, error: null });
+      return;
+    }
+    let cancelled = false;
+    setState((s) => ({ ...s, loading: true, error: null }));
+    (async () => {
+      try {
+        const { data: prom, error: e1 } = await supabase.from("promoters").select("id, name, email").eq("email", email).maybeSingle();
+        if (e1) throw new Error(e1.message);
+        if (!prom) {
+          const { data: created, error: e2 } = await supabase.from("promoters").insert({ email, name: email.split("@")[0] }).select().single();
+          if (e2) throw new Error(e2.message);
+          const shift2 = await SupabaseAPI.findOrCreateActiveShift(promotionId, created.id);
+          if (cancelled) return;
+          setState({ shiftId: shift2.id, promoterId: created.id, loading: false, error: null });
+          return;
+        }
+        const shift = await SupabaseAPI.findOrCreateActiveShift(promotionId, prom.id);
+        if (cancelled) return;
+        setState({ shiftId: shift.id, promoterId: prom.id, loading: false, error: null });
+      } catch (err) {
+        if (cancelled) return;
+        setState({ shiftId: null, promoterId: null, loading: false, error: err && err.message ? err.message : String(err) });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [email, promotionId]);
+  return state;
+}
 var PROMOTION = {
-  id: "P-2026-042",
-  brand: "Aurelle Paris",
-  campaign: "Spring Bloom Edition 2026",
+  id: "P-2026-05",
+  brand: "Chanel",
+  campaign: "Chanel Beauty Travel Retail \xB7 BER 2026",
   client: "Gebr. Heinemann",
-  airport: "Frankfurt Airport",
-  location: "Terminal 2 \xB7 Heinemann Duty Free",
-  startDate: "20 Apr 2026",
-  endDate: "10 May 2026",
-  targetRevenue: 28e3,
+  airport: "Berlin BER",
+  location: "Terminal 1 \xB7 Heinemann Duty Free",
+  startDate: "01 Jun 2026",
+  endDate: "30 Jun 2026",
+  targetRevenue: 42e3,
   briefingUrl: "#"
 };
 var PROMOTERS = [
@@ -473,11 +711,11 @@ var PROMOTERS = [
   { id: "U-207", name: "Aisha Begum", initials: "AB" }
 ];
 var PRODUCTS = [
-  { ean: "4047462001234", name: "Bloom EDP 50ml", category: "Fragrance", price: 89 },
-  { ean: "4047462001241", name: "Bloom EDP 100ml", category: "Fragrance", price: 129 },
-  { ean: "4047462001258", name: "Bloom Travel Set", category: "Set", price: 159 },
-  { ean: "4047462001265", name: "Bloom Body Lotion 200ml", category: "Body", price: 45 },
-  { ean: "4047462001272", name: "Bloom Discovery Mini", category: "Mini", price: 29 }
+  { ean: "3145891255508", name: "Chanel No.5 EDP 100ml", category: "Fragrance", price: 159 },
+  { ean: "3145891166507", name: "Chanel Coco Mademoiselle EDP 100ml", category: "Fragrance", price: 149 },
+  { ean: "3145891074208", name: "Bleu de Chanel EDP 100ml", category: "Fragrance", price: 139 },
+  { ean: "3145891415308", name: "Chanel Chance EDT 100ml", category: "Fragrance", price: 135 },
+  { ean: "3145891298307", name: "Chanel Hydra Beauty Cr\xE8me 50ml", category: "Skincare", price: 99 }
 ];
 var DAILY_REVENUE = [
   { day: "20 Apr", revenue: 980, units: 9 },
@@ -499,11 +737,11 @@ var DAILY_REVENUE = [
   { day: "06 May", revenue: 1130, units: 11 }
 ];
 var PRODUCT_PERFORMANCE = [
-  { name: "Bloom EDP 100ml", units: 78, revenue: 10062 },
-  { name: "Bloom EDP 50ml", units: 64, revenue: 5696 },
-  { name: "Bloom Travel Set", units: 31, revenue: 4929 },
-  { name: "Bloom Body Lotion", units: 42, revenue: 1890 },
-  { name: "Bloom Discovery Mini", units: 22, revenue: 638 }
+  { name: "Chanel No.5 EDP 100ml", units: 84, revenue: 13356 },
+  { name: "Coco Mademoiselle EDP 100ml", units: 71, revenue: 10579 },
+  { name: "Bleu de Chanel EDP 100ml", units: 58, revenue: 8062 },
+  { name: "Chanel Chance EDT 100ml", units: 36, revenue: 4860 },
+  { name: "Chanel Hydra Beauty Cr\xE8me 50ml", units: 22, revenue: 2178 }
 ];
 var PROMOTER_PERFORMANCE = [
   { name: "Lena S.", units: 92, revenue: 8940, contacts: 312 },
@@ -530,9 +768,9 @@ var NON_PURCHASE_REASONS = [
   { reason: "Did not like the scent", count: 19 }
 ];
 var OUT_OF_STOCK = [
-  { product: "Bloom EDP 100ml \u2014 Tester", lostUnits: 18, lostRevenue: 2322 },
-  { product: "Bloom Travel Set (English packaging)", lostUnits: 9, lostRevenue: 1431 },
-  { product: "Bloom EDP 30ml", lostUnits: 14, lostRevenue: 0, note: "Not listed for pilot" }
+  { product: "Chanel No.5 EDP 100ml \u2014 Tester", lostUnits: 18, lostRevenue: 2862 },
+  { product: "Coco Mademoiselle 50ml (Travel pack)", lostUnits: 9, lostRevenue: 1341 },
+  { product: "Chanel Chance EDP 50ml", lostUnits: 14, lostRevenue: 0, note: "Not listed for pilot" }
 ];
 var QUOTES = [
   { quote: "I bought this exact one last summer in Dubai \u2014 I love it.", who: "Female, ~35", promoter: "LS", clientVisible: true },
@@ -542,33 +780,31 @@ var QUOTES = [
   { quote: "The booth lighting makes it hard to see the box clearly.", who: "Internal note", promoter: "LS", clientVisible: false }
 ];
 var CUSTOM_QUESTIONS = [
-  { id: "Q1", question: "How often did customers buy 2+ products together?", type: "count", response: 47, clientVisible: true },
-  { id: "Q2", question: "Which size was most often missing?", type: "text", response: "100ml tester \u2014 customers wanted to smell before buying.", clientVisible: true },
-  { id: "Q3", question: "What feedback did customers give about the giveaway?", type: "text", response: "Mostly positive on the Discovery Mini sample. Some preferred a body lotion sample.", clientVisible: true },
-  { id: "Q4", question: "Any operational issues with the booth setup?", type: "text", response: "Day 1 \u2014 booth lighting too dim; fixed Day 2. Lower footfall after 18:00 near gate A23.", clientVisible: false }
+  { id: "Q1", question: "Wie oft kauften Kunden 2+ Produkte zusammen?", type: "count", response: 41, clientVisible: true },
+  { id: "Q2", question: "Welche Gr\xF6\xDFe fehlte am h\xE4ufigsten?", type: "text", response: "Coco Mademoiselle 50ml \u2014 viele Kunden suchten das Reiseformat.", clientVisible: true },
+  { id: "Q3", question: "Welches Feedback gaben Kunden zur Probe / Sample?", type: "text", response: "Sehr positives Echo auf das No.5 Discovery-Sample. Manche w\xFCnschen ein Hydra Beauty Sample.", clientVisible: true },
+  { id: "Q4", question: "Operative Probleme mit dem Boutique-Setup?", type: "text", response: "Tag 1 \u2014 Beleuchtung am Display zu dunkel; Tag 2 behoben. Geringere Frequenz nach 19:00 am Gate B14.", clientVisible: false }
 ];
 var MISSING_REPORTS = [
   { date: "26 Apr 2026", promoter: "Aisha B.", shift: "Late" },
   { date: "02 May 2026", promoter: "Tom\xE1s \xC1.", shift: "Early" }
 ];
 var LOCATIONS = [
-  { id: "FRA-T2", airport: "Frankfurt", terminal: "Terminal 2", booth: "Heinemann DF Z-Gates", status: "active", units: 237, revenue: 24215, contacts: 821, target: 28e3, oosFlag: true, rating: "A" },
-  { id: "MUC-T2", airport: "Munich", terminal: "Terminal 2", booth: "Heinemann DF G-Gates", status: "active", units: 142, revenue: 14380, contacts: 512, target: 18e3, oosFlag: false, rating: "B" },
-  { id: "HAM-A", airport: "Hamburg", terminal: "Pier A", booth: "Heinemann DF non-Schengen", status: "active", units: 96, revenue: 8920, contacts: 318, target: 12e3, oosFlag: false, rating: "B" },
-  { id: "BER-T1", airport: "Berlin BER", terminal: "Terminal 1 Main", booth: "Heinemann DF C-Gates", status: "completed", units: 312, revenue: 31480, contacts: 1042, target: 28e3, oosFlag: false, rating: "A" }
+  { id: "BER-T1-N", airport: "Berlin BER", terminal: "Terminal 1 \xB7 North", booth: "Chanel Boutique \xB7 Heinemann DF", status: "active", units: 184, revenue: 27200, contacts: 642, target: 42e3, oosFlag: true, rating: "A" },
+  { id: "BER-T1-S", airport: "Berlin BER", terminal: "Terminal 1 \xB7 South", booth: "Heinemann DF B-Gates", status: "active", units: 96, revenue: 13880, contacts: 348, target: 18e3, oosFlag: false, rating: "B" }
 ];
 var LIVE_PROMOTERS = [
-  { id: "U-201", name: "Lena Schmidt", initials: "LS", cluster: "Frankfurt T2", booth: "Heinemann DF Z-Gates", onShift: "08:30", duration: "4h 42m", expected: 14, sales: 17, approaches: 78, interest: 42, status: "ahead" },
-  { id: "U-203", name: "Tom\xE1s \xC1lvarez", initials: "TA", cluster: "Frankfurt T2", booth: "Heinemann DF Z-Gates", onShift: "09:00", duration: "4h 12m", expected: 12, sales: 12, approaches: 64, interest: 31, status: "on-track" },
-  { id: "U-207", name: "Aisha Begum", initials: "AB", cluster: "Munich T2", booth: "Heinemann DF G-Gates", onShift: "10:00", duration: "3h 12m", expected: 10, sales: 6, approaches: 48, interest: 19, status: "behind" },
-  { id: "U-214", name: "Jonas Becker", initials: "JB", cluster: "Hamburg A", booth: "Heinemann DF non-Schengen", onShift: "11:00", duration: "2h 12m", expected: 7, sales: 8, approaches: 39, interest: 22, status: "ahead" }
+  { id: "U-201", name: "Lena Schmidt", initials: "LS", cluster: "Berlin BER \xB7 T1 North", booth: "Chanel Boutique", onShift: "08:30", duration: "4h 42m", expected: 14, sales: 17, approaches: 78, interest: 42, status: "ahead" },
+  { id: "U-203", name: "Tom\xE1s \xC1lvarez", initials: "TA", cluster: "Berlin BER \xB7 T1 North", booth: "Chanel Boutique", onShift: "09:00", duration: "4h 12m", expected: 12, sales: 12, approaches: 64, interest: 31, status: "on-track" },
+  { id: "U-207", name: "Aisha Begum", initials: "AB", cluster: "Berlin BER \xB7 T1 South", booth: "Heinemann DF B-Gates", onShift: "10:00", duration: "3h 12m", expected: 10, sales: 6, approaches: 48, interest: 19, status: "behind" },
+  { id: "U-214", name: "Jonas Becker", initials: "JB", cluster: "Berlin BER \xB7 T1 South", booth: "Heinemann DF B-Gates", onShift: "11:00", duration: "2h 12m", expected: 7, sales: 8, approaches: 39, interest: 22, status: "ahead" }
 ];
 var ACTIVITY_FEED = [
-  { time: "2 min ago", who: "Lena S.", what: "logged a sale", detail: "Bloom EDP 100ml \xD7 1 \xB7 \u20AC129", tone: "blue" },
-  { time: "6 min ago", who: "Jonas B.", what: "passed expected pace", detail: "8 of 7 units \xB7 Hamburg Pier A", tone: "green" },
-  { time: "14 min ago", who: "Lena S.", what: "captured a customer quote", detail: '"I bought this in Dubai last summer..."', tone: "amber" },
-  { time: "22 min ago", who: "Aisha B.", what: "flagged out-of-stock", detail: "Bloom Travel Set (English packaging)", tone: "rose" },
-  { time: "31 min ago", who: "Tom\xE1s \xC1.", what: "checked in", detail: "Frankfurt T2 \xB7 Heinemann DF Z-Gates", tone: "slate" },
+  { time: "2 min ago", who: "Lena S.", what: "logged a sale", detail: "Coco Mademoiselle EDP 100ml \xD7 1 \xB7 \u20AC149", tone: "blue" },
+  { time: "6 min ago", who: "Jonas B.", what: "passed expected pace", detail: "8 of 7 units \xB7 BER T1 South", tone: "green" },
+  { time: "14 min ago", who: "Lena S.", what: "captured a customer quote", detail: '"Ich kaufe No.5 immer auf Reisen\u2026"', tone: "amber" },
+  { time: "22 min ago", who: "Aisha B.", what: "flagged out-of-stock", detail: "Coco Mademoiselle 50ml (Travel pack)", tone: "rose" },
+  { time: "31 min ago", who: "Tom\xE1s \xC1.", what: "checked in", detail: "BER T1 North \xB7 Chanel Boutique", tone: "slate" },
   { time: "58 min ago", who: "Lena S.", what: "completed shift-start checklist", detail: "Booth photo \xB7 stock count confirmed", tone: "slate" }
 ];
 var FLIGHT_BANKS_BY_AIRPORT = {
@@ -625,42 +861,40 @@ var HOURLY_SALES_TODAY = [
   { hour: "19", sales: 7, contacts: 36 }
 ];
 var ALERTS = [
-  { id: 1, level: "critical", time: "13 May, 09:12", msg: "Bloom EDP 100ml tester missing at Frankfurt T2 \u2014 \u20AC322 lost yesterday" },
+  { id: 1, level: "critical", time: "13 May, 09:12", msg: "No.5 EDP 100ml tester missing at BER T1 \u2014 \u20AC322 lost yesterday" },
   { id: 2, level: "warning", time: "13 May, 08:50", msg: "Aisha B. tracking 40% below expected pace this morning" },
   { id: 3, level: "warning", time: "12 May, 21:18", msg: "Daily report missing for Tom\xE1s \xC1. (02 May, Early shift)" },
-  { id: 4, level: "info", time: "12 May, 14:02", msg: "Frankfurt T2 promotion at 86% of target with 4 days remaining" }
+  { id: 4, level: "info", time: "12 May, 14:02", msg: "Berlin BER Chanel pilot at 86% of target with 4 days remaining" }
 ];
 var PROMOTER_RATINGS = [
-  { id: "U-201", name: "Lena Schmidt", region: "Frankfurt", rank: 1, salesTotal: 286, convRate: 38.4, revenue: 28940, rating: "A", trend: 12, status: "above" },
-  { id: "U-203", name: "Tom\xE1s \xC1lvarez", region: "Frankfurt", rank: 2, salesTotal: 248, convRate: 34.9, revenue: 24830, rating: "A", trend: 6, status: "above" },
-  { id: "U-207", name: "Aisha Begum", region: "Munich", rank: 8, salesTotal: 167, convRate: 22.1, revenue: 16845, rating: "C", trend: -5, status: "below" },
-  { id: "U-214", name: "Jonas Becker", region: "Hamburg", rank: 3, salesTotal: 198, convRate: 31.2, revenue: 19720, rating: "B", trend: 4, status: "on-target" },
-  { id: "U-218", name: "Marta Kowal", region: "Berlin (closed)", rank: 4, salesTotal: 189, convRate: 30.5, revenue: 18560, rating: "B", trend: 0, status: "on-target" },
-  { id: "U-221", name: "Hugo Lef\xE8vre", region: "Frankfurt", rank: 9, salesTotal: 142, convRate: 21.4, revenue: 13880, rating: "C", trend: -8, status: "below" }
+  { id: "U-201", name: "Lena Schmidt", region: "Berlin BER", rank: 1, salesTotal: 286, convRate: 38.4, revenue: 28940, rating: "A", trend: 12, status: "above" },
+  { id: "U-203", name: "Tom\xE1s \xC1lvarez", region: "Berlin BER", rank: 2, salesTotal: 248, convRate: 34.9, revenue: 24830, rating: "A", trend: 6, status: "above" },
+  { id: "U-207", name: "Aisha Begum", region: "Berlin BER", rank: 8, salesTotal: 167, convRate: 22.1, revenue: 16845, rating: "C", trend: -5, status: "below" },
+  { id: "U-214", name: "Jonas Becker", region: "Berlin BER", rank: 3, salesTotal: 198, convRate: 31.2, revenue: 19720, rating: "B", trend: 4, status: "on-target" },
+  { id: "U-218", name: "Marta Kowal", region: "Berlin BER", rank: 4, salesTotal: 189, convRate: 30.5, revenue: 18560, rating: "B", trend: 0, status: "on-target" },
+  { id: "U-221", name: "Hugo Lef\xE8vre", region: "Berlin BER", rank: 9, salesTotal: 142, convRate: 21.4, revenue: 13880, rating: "C", trend: -8, status: "below" }
 ];
 var GAPS = [
-  { promoter: "Aisha Begum", region: "Munich T2", gapType: "Conversion rate", current: "22.1%", target: "30%", severity: "critical", suggested: "Open-question objection handling" },
-  { promoter: "Hugo Lef\xE8vre", region: "Frankfurt T2", gapType: "Sales volume", current: "8 / day avg", target: "12 / day", severity: "critical", suggested: "Cross-sell with Travel Set" },
-  { promoter: "Sergei Volkov", region: "Munich T2", gapType: "Daily report missing", current: "2 of last 5 shifts", target: "100%", severity: "moderate", suggested: "Reminder + manager 1:1" }
+  { promoter: "Aisha Begum", region: "BER T1 South", gapType: "Conversion rate", current: "22.1%", target: "30%", severity: "critical", suggested: "Open-question objection handling" },
+  { promoter: "Hugo Lef\xE8vre", region: "BER T1 North", gapType: "Sales volume", current: "8 / day avg", target: "12 / day", severity: "critical", suggested: "Cross-sell Coco Mademoiselle + No.5" },
+  { promoter: "Sergei Volkov", region: "BER T1 South", gapType: "Daily report missing", current: "2 of last 5 shifts", target: "100%", severity: "moderate", suggested: "Reminder + manager 1:1" }
 ];
 var RECENT_REPORTS = [
-  { name: "Heinemann \xB7 Aurelle Paris \xB7 Weekly W18.pdf", type: "Weekly", generated: "06 May 2026", by: "M. Schneider" },
-  { name: "Heinemann \xB7 Aurelle Paris \xB7 Mid-pilot review.pdf", type: "Custom", generated: "30 Apr 2026", by: "M. Schneider" },
-  { name: "Frankfurt T2 \xB7 Booth audit \xB7 23 Apr.pdf", type: "Audit", generated: "24 Apr 2026", by: "J. Klein" }
+  { name: "Heinemann \xB7 Chanel BER \xB7 Weekly W19.pdf", type: "Weekly", generated: "10 Jun 2026", by: "M. Schneider" },
+  { name: "Heinemann \xB7 Chanel BER \xB7 Mid-pilot review.pdf", type: "Custom", generated: "15 Jun 2026", by: "M. Schneider" },
+  { name: "BER T1 \xB7 Chanel boutique audit \xB7 03 Jun.pdf", type: "Audit", generated: "04 Jun 2026", by: "J. Klein" }
 ];
 var PRODUCT_CATALOG = [
-  // Aurelle Paris — hero brand for the current pilot promotion
-  { ean: "2999100000011", name: "Aurelle Paris Bloom EDP", brand: "Aurelle Paris", category: "Fragrance", subcategory: "EDP Women", size: "50ml", priceEur: 79, promoFlag: true },
-  { ean: "2999100000028", name: "Aurelle Paris Bloom EDP", brand: "Aurelle Paris", category: "Fragrance", subcategory: "EDP Women", size: "100ml", priceEur: 119, promoFlag: true },
-  { ean: "2999100000035", name: "Aurelle Paris Bloom Gift Set", brand: "Aurelle Paris", category: "Fragrance", subcategory: "Gift Set", size: "100ml + lotion", priceEur: 139, promoFlag: true },
+  // Chanel — hero brand for the current pilot promotion (flagged with promoFlag).
+  { ean: "3145891255508", name: "Chanel No.5 EDP", brand: "Chanel", category: "Fragrance", subcategory: "EDP Women", size: "100ml", priceEur: 159, promoFlag: true },
+  { ean: "3145891166507", name: "Chanel Coco Mademoiselle EDP", brand: "Chanel", category: "Fragrance", subcategory: "EDP Women", size: "100ml", priceEur: 149, promoFlag: true },
+  { ean: "3145891074208", name: "Bleu de Chanel EDP", brand: "Chanel", category: "Fragrance", subcategory: "EDP Men", size: "100ml", priceEur: 139, promoFlag: true },
+  { ean: "3145891415308", name: "Chanel Chance EDT", brand: "Chanel", category: "Fragrance", subcategory: "EDT Women", size: "100ml", priceEur: 135, promoFlag: true },
+  { ean: "3145891298307", name: "Chanel Hydra Beauty Cr\xE8me", brand: "Chanel", category: "Skincare", subcategory: "Moisturiser", size: "50ml", priceEur: 99, promoFlag: true },
   // Dior
   { ean: "3348901486279", name: "Dior Sauvage EDT", brand: "Dior", category: "Fragrance", subcategory: "EDT Men", size: "100ml", priceEur: 105 },
   { ean: "3348901486286", name: "Dior Sauvage EDP", brand: "Dior", category: "Fragrance", subcategory: "EDP Men", size: "100ml", priceEur: 125 },
   { ean: "3348901119887", name: "Miss Dior EDP", brand: "Dior", category: "Fragrance", subcategory: "EDP Women", size: "100ml", priceEur: 135 },
-  // Chanel
-  { ean: "3145891255508", name: "Chanel No.5 EDP", brand: "Chanel", category: "Fragrance", subcategory: "EDP Women", size: "100ml", priceEur: 159 },
-  { ean: "3145891166507", name: "Chanel Coco Mademoiselle EDP", brand: "Chanel", category: "Fragrance", subcategory: "EDP Women", size: "100ml", priceEur: 149 },
-  { ean: "3145891074208", name: "Bleu de Chanel EDP", brand: "Chanel", category: "Fragrance", subcategory: "EDP Men", size: "100ml", priceEur: 139 },
   // YSL
   { ean: "3614272443693", name: "YSL Black Opium EDP", brand: "Yves Saint Laurent", category: "Fragrance", subcategory: "EDP Women", size: "90ml", priceEur: 119 },
   { ean: "3614272443709", name: "YSL Libre EDP", brand: "Yves Saint Laurent", category: "Fragrance", subcategory: "EDP Women", size: "90ml", priceEur: 125 },
@@ -851,8 +1085,8 @@ function parseProductsCSV(csv) {
   return out;
 }
 var promotionProductsStore = {
-  // Aurelle Paris pilot at Frankfurt T2 — three SKUs
-  "P-2026-04": ["2999100000011", "2999100000028", "2999100000035"]
+  // Chanel × Heinemann pilot at Berlin BER — five SKUs
+  "P-2026-05": ["3145891255508", "3145891166507", "3145891074208", "3145891415308", "3145891298307"]
 };
 var promoSubscribers = [];
 function publishPromoProducts() {
@@ -889,7 +1123,7 @@ function usePromoProductsVersion() {
   }, []);
   return v;
 }
-var activePromotionId = "P-2026-04";
+var activePromotionId = "P-2026-05";
 var activePromoSubscribers = [];
 function setActivePromotion(id) {
   activePromotionId = id;
@@ -1636,7 +1870,7 @@ function App() {
   const handlePromoterExit = isAdmin ? () => setAdminView("manager") : auth.signOut;
   const handleManagerExit = isAdmin ? () => setAdminView("manager") : auth.signOut;
   const handleClientExit = isAdmin ? () => setAdminView("manager") : () => userRole === "manager" ? setPreviewClient(false) : auth.signOut();
-  return /* @__PURE__ */ React.createElement("div", { className: "min-h-screen bg-slate-50 text-slate-900", style: { fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif" } }, displayRole === "promoter" && /* @__PURE__ */ React.createElement(PromoterApp, { onExit: handlePromoterExit }), displayRole === "manager" && /* @__PURE__ */ React.createElement(ManagerApp, { onExit: handleManagerExit, onPreviewClient: () => isAdmin ? setAdminView("client") : setPreviewClient(true) }), displayRole === "client" && /* @__PURE__ */ React.createElement(ClientReport, { onExit: handleClientExit }), isAdmin && /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { className: "min-h-screen bg-slate-50 text-slate-900", style: { fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif" } }, displayRole === "promoter" && /* @__PURE__ */ React.createElement(PromoterApp, { onExit: handlePromoterExit, userEmail: auth.session.user.email }), displayRole === "manager" && /* @__PURE__ */ React.createElement(ManagerApp, { onExit: handleManagerExit, onPreviewClient: () => isAdmin ? setAdminView("client") : setPreviewClient(true) }), displayRole === "client" && /* @__PURE__ */ React.createElement(ClientReport, { onExit: handleClientExit }), isAdmin && /* @__PURE__ */ React.createElement(
     AdminViewSwitcher,
     {
       activeView: adminView,
@@ -1698,14 +1932,17 @@ function RolePicker({ onPick }) {
     );
   })), /* @__PURE__ */ React.createElement("div", { className: "mt-10 bg-white border border-slate-200 rounded-2xl p-6" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-start gap-4" }, /* @__PURE__ */ React.createElement("div", { className: "w-10 h-10 rounded-lg bg-amber-50 text-amber-700 flex items-center justify-center flex-shrink-0" }, /* @__PURE__ */ React.createElement(Sparkles, { className: "w-5 h-5" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", { className: "font-semibold text-slate-900" }, "What this prototype demonstrates"), /* @__PURE__ */ React.createElement("p", { className: "mt-1 text-sm text-slate-600" }, "Replacing Google Forms with a structured Promotion Insights layer: the Student App stays the source of truth for shifts and check-in/out, and only the promotion-results capture and reporting live in this new layer. All data is mocked for demo purposes."))))), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-6xl mx-auto px-6 py-4 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "UCM Promotion Insights \xB7 Prototype v0.1"), /* @__PURE__ */ React.createElement("span", null, "Demo data only \xB7 Not connected to live systems"))));
 }
-function PromoterApp({ onExit }) {
+function PromoterApp({ onExit, userEmail }) {
   const [screen, setScreen] = useState("student-home");
-  const [sales, setSales] = useState([
+  const promoId = useActivePromotionId();
+  const liveShift = useActiveShift(DATA_SOURCE === "supabase" ? userEmail : null, DATA_SOURCE === "supabase" ? promoId : null);
+  const initialSales = DATA_SOURCE === "supabase" ? [] : [
     { id: 1, ean: "4047462001241", qty: 1, time: "10:24" },
     { id: 2, ean: "4047462001234", qty: 2, time: "11:02" },
     { id: 3, ean: "4047462001258", qty: 1, time: "12:46" }
-  ]);
-  const [checklist, setChecklist] = useState({ photo: true, stockConfirmed: true, briefingRead: true, noticedOOS: "Bloom EDP 100ml tester \u2014 only 1 left" });
+  ];
+  const [sales, setSales] = useState(initialSales);
+  const [checklist, setChecklist] = useState({ photo: true, stockConfirmed: true, briefingRead: true, noticedOOS: "Chanel No.5 EDP 100ml tester \u2014 only 1 left" });
   const [samples, setSamples] = useState({ discoveryMini: 14, bodyLotion: 3 });
   const [contacts, setContacts] = useState({ total: 42, female: 26, male: 14, mixed: 2, ageMain: "35\u201344" });
   const [feedback, setFeedback] = useState({
@@ -1742,7 +1979,11 @@ function PromoterApp({ onExit }) {
       shiftRevenue,
       shiftUnits,
       submitted,
-      setSubmitted
+      setSubmitted,
+      shiftId: liveShift.shiftId,
+      promoterId: liveShift.promoterId,
+      shiftError: liveShift.error,
+      shiftLoading: liveShift.loading
     }
   )), /* @__PURE__ */ React.createElement("div", { className: "mt-6 text-xs text-slate-500 max-w-sm text-center" }, "Tap ", /* @__PURE__ */ React.createElement("span", { className: "font-medium text-slate-700" }, "Open Promotion Tracker"), " on the Student App home to enter the new MVP flow. The Student App handles shifts; the Promotion Tracker captures sales & insights."));
 }
@@ -1821,7 +2062,7 @@ function TrackerChecklist({ checklist, setChecklist, setScreen }) {
   ));
 }
 function TrackerTravel({ samples, setSamples }) {
-  return /* @__PURE__ */ React.createElement("div", { className: "px-5 py-5 space-y-5" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Pill, { tone: "purple" }, "Travel retail"), /* @__PURE__ */ React.createElement("h3", { className: "mt-2 font-semibold" }, "Samples dispensed"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-slate-500 mt-1" }, "Airport-specific capture \u2014 tracking sample \u2192 sale conversion.")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "space-y-2" }, /* @__PURE__ */ React.createElement(SampleRow, { label: "Bloom Discovery Mini", value: samples.discoveryMini, onChange: (v) => setSamples({ ...samples, discoveryMini: v }) }), /* @__PURE__ */ React.createElement(SampleRow, { label: "Bloom Body Lotion (mini)", value: samples.bodyLotion, onChange: (v) => setSamples({ ...samples, bodyLotion: v }) })), /* @__PURE__ */ React.createElement("div", { className: "mt-2 text-xs text-slate-500" }, "Sample \u2192 sale conversion is one of the strongest signals in fragrance promotions.")));
+  return /* @__PURE__ */ React.createElement("div", { className: "px-5 py-5 space-y-5" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Pill, { tone: "purple" }, "Travel retail"), /* @__PURE__ */ React.createElement("h3", { className: "mt-2 font-semibold" }, "Samples dispensed"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-slate-500 mt-1" }, "Airport-specific capture \u2014 tracking sample \u2192 sale conversion.")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "space-y-2" }, /* @__PURE__ */ React.createElement(SampleRow, { label: "Chanel No.5 Discovery Sample", value: samples.discoveryMini, onChange: (v) => setSamples({ ...samples, discoveryMini: v }) }), /* @__PURE__ */ React.createElement(SampleRow, { label: "Hydra Beauty Cr\xE8me (sachet)", value: samples.bodyLotion, onChange: (v) => setSamples({ ...samples, bodyLotion: v }) })), /* @__PURE__ */ React.createElement("div", { className: "mt-2 text-xs text-slate-500" }, "Sample \u2192 sale conversion is one of the strongest signals in fragrance promotions.")));
 }
 function SampleRow({ label, value, onChange }) {
   return /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between border border-slate-200 rounded-lg px-3 py-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-sm" }, label), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement("button", { onClick: () => onChange(Math.max(0, value - 1)), className: "w-7 h-7 rounded-full border border-slate-300 flex items-center justify-center" }, /* @__PURE__ */ React.createElement(Minus, { className: "w-3.5 h-3.5" })), /* @__PURE__ */ React.createElement("span", { className: "text-sm font-semibold w-6 text-center" }, value), /* @__PURE__ */ React.createElement("button", { onClick: () => onChange(value + 1), className: "w-7 h-7 rounded-full border border-slate-300 flex items-center justify-center" }, /* @__PURE__ */ React.createElement(Plus, { className: "w-3.5 h-3.5" }))));
@@ -1866,7 +2107,7 @@ function TrackerHome({ setScreen, shiftRevenue, shiftUnits, contacts, submitted,
     submitted ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4" }), " Daily report submitted") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Send, { className: "w-4 h-4" }), " Submit daily report")
   ), /* @__PURE__ */ React.createElement("div", { className: "mt-1.5 text-xs text-slate-500 text-center" }, "Submitting marks the day as complete. You can still edit until midnight.")));
 }
-function TrackerSales({ setScreen, sales, setSales }) {
+function TrackerSales({ setScreen, sales, setSales, shiftId, shiftError, shiftLoading }) {
   const [qty, setQty] = useState(1);
   const [lookupOpen, setLookupOpen] = useState(false);
   const [confirmEan, setConfirmEan] = useState(null);
@@ -1888,6 +2129,12 @@ function TrackerSales({ setScreen, sales, setSales }) {
     setSales([...sales, { id: Date.now(), ean, qty: q, time: (/* @__PURE__ */ new Date()).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) }]);
     setQty(1);
     setConfirmEan(null);
+    if (DATA_SOURCE === "supabase" && shiftId) {
+      const info = productInfo(ean);
+      SupabaseAPI.recordSale(shiftId, ean, q, info.price || null).catch((err) => addToast(`Sale sync failed: ${err && err.message ? err.message : err}`, "rose"));
+    } else if (DATA_SOURCE === "supabase" && !shiftId && !shiftLoading) {
+      addToast("No active shift \u2014 sale saved locally only", "amber");
+    }
   };
   const tapAdd = (ean) => logSale(ean, 1);
   const onLookupPick = (product) => {
@@ -2127,22 +2374,52 @@ function TrackerCustom({ customAnswers, setCustomAnswers }) {
     }
   ));
 }
-function TrackerSubmit({ setScreen, sales, contacts, feedback, customAnswers, shiftRevenue, shiftUnits, submitted, setSubmitted }) {
+function TrackerSubmit({ setScreen, sales, contacts, feedback, customAnswers, shiftRevenue, shiftUnits, submitted, setSubmitted, shiftId }) {
+  const [submitting, setSubmitting] = useState(false);
+  const handleSubmit = async () => {
+    if (DATA_SOURCE !== "supabase" || !shiftId) {
+      setSubmitted(true);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const writes = [];
+      if (feedback.quote && feedback.quote.trim()) {
+        writes.push(SupabaseAPI.recordFeedbackNote(shiftId, "quote", feedback.quote.trim(), null));
+      }
+      if (feedback.note && feedback.note.trim()) {
+        writes.push(SupabaseAPI.recordFeedbackNote(shiftId, "observation", feedback.note.trim(), null));
+      }
+      if (feedback.lostRev && Number(feedback.lostRev) > 0) {
+        writes.push(SupabaseAPI.recordFeedbackNote(shiftId, "lost_revenue", feedback.missing || "Lost revenue (estimate)", Number(feedback.lostRev)));
+      }
+      for (const reason of feedback.reasons || []) {
+        writes.push(SupabaseAPI.recordFeedbackNote(shiftId, "non_purchase", reason, null));
+      }
+      await Promise.all(writes);
+      await SupabaseAPI.updateShift(shiftId, { status: "submitted", end_time: (/* @__PURE__ */ new Date()).toISOString() });
+      setSubmitted(true);
+      addToast("Daily report submitted", "green");
+    } catch (err) {
+      addToast(`Submit failed: ${err && err.message ? err.message : err}`, "rose");
+    } finally {
+      setSubmitting(false);
+    }
+  };
   return /* @__PURE__ */ React.createElement("div", { className: "px-5 py-5 space-y-4" }, /* @__PURE__ */ React.createElement("h3", { className: "font-semibold" }, "Submit Daily Report"), /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-xl p-4 space-y-2.5" }, /* @__PURE__ */ React.createElement("div", { className: "flex justify-between text-sm" }, /* @__PURE__ */ React.createElement("span", { className: "text-slate-600" }, "Sales"), /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, shiftUnits, " units \xB7 ", fmtEUR(shiftRevenue))), /* @__PURE__ */ React.createElement("div", { className: "flex justify-between text-sm" }, /* @__PURE__ */ React.createElement("span", { className: "text-slate-600" }, "Customer contacts"), /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, contacts.total)), /* @__PURE__ */ React.createElement("div", { className: "flex justify-between text-sm" }, /* @__PURE__ */ React.createElement("span", { className: "text-slate-600" }, "Main age group"), /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, contacts.ageMain)), /* @__PURE__ */ React.createElement("div", { className: "flex justify-between text-sm" }, /* @__PURE__ */ React.createElement("span", { className: "text-slate-600" }, "Non-purchase reasons"), /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, feedback.reasons.length)), /* @__PURE__ */ React.createElement("div", { className: "flex justify-between text-sm" }, /* @__PURE__ */ React.createElement("span", { className: "text-slate-600" }, "Estimated lost revenue"), /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, fmtEUR(feedback.lostRev))), /* @__PURE__ */ React.createElement("div", { className: "flex justify-between text-sm" }, /* @__PURE__ */ React.createElement("span", { className: "text-slate-600" }, "Custom Qs answered"), /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, Object.keys(customAnswers).length))), feedback.quote && /* @__PURE__ */ React.createElement("div", { className: "border-l-2 border-amber-400 bg-amber-50 rounded-r-lg px-3 py-2.5" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-amber-700 uppercase tracking-wide font-semibold" }, "Quote to share"), /* @__PURE__ */ React.createElement("div", { className: "text-sm italic text-slate-800 mt-1" }, '"', feedback.quote, '"')), !submitted ? /* @__PURE__ */ React.createElement(
     "button",
     {
-      onClick: () => setSubmitted(true),
-      className: "w-full bg-slate-900 hover:bg-slate-800 text-white rounded-xl py-3 px-4 font-medium flex items-center justify-center gap-2"
+      onClick: handleSubmit,
+      disabled: submitting,
+      className: "w-full bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 text-white rounded-xl py-3 px-4 font-medium flex items-center justify-center gap-2"
     },
     /* @__PURE__ */ React.createElement(Send, { className: "w-4 h-4" }),
-    " Submit report"
+    " ",
+    submitting ? "Submitting\u2026" : "Submit report"
   ) : /* @__PURE__ */ React.createElement("div", { className: "bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center" }, /* @__PURE__ */ React.createElement("div", { className: "w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto" }, /* @__PURE__ */ React.createElement(Check, { className: "w-5 h-5" })), /* @__PURE__ */ React.createElement("div", { className: "mt-2 font-semibold text-emerald-900" }, "Report submitted"), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-emerald-700 mt-1" }, "Your data is now on the manager dashboard. You can edit until midnight.")), /* @__PURE__ */ React.createElement("button", { onClick: () => setScreen("tracker-home"), className: "w-full text-sm text-slate-600 py-2" }, "Back to tracker home"));
 }
 var PROMOTION_LIST = [
-  { id: "P-2026-04", brand: "Aurelle Paris", client: "Gebr. Heinemann", note: "Active \xB7 Frankfurt T2" },
-  { id: "P-2026-03", brand: "Maison Verte", client: "Lagard\xE8re TR", note: "Active \xB7 Munich T2" },
-  { id: "P-2026-02", brand: "Sample Bar", client: "Dufry", note: "Closing \xB7 Hamburg" },
-  { id: "P-2026-01", brand: "Eaux de Voyage", client: "Heinemann", note: "Closed \xB7 Berlin T1" }
+  { id: "P-2026-05", brand: "Chanel", client: "Gebr. Heinemann", note: "Active \xB7 Berlin BER \xB7 Terminal 1" }
 ];
 function ManagerApp({ onExit, onPreviewClient }) {
   const [tab, setTab] = useState("overview");
@@ -2164,6 +2441,7 @@ function ManagerApp({ onExit, onPreviewClient }) {
   const [filters, setFilters] = useState({ range: "campaign", location: "all", promoter: "all", shift: "all" });
   const [reminderSent, setReminderSent] = useState({});
   const [editPromoOpen, setEditPromoOpen] = useState(false);
+  const [createPromoOpen, setCreatePromoOpen] = useState(false);
   useEffect(() => {
     if (projectList.length > 0 && !projectList.find((p) => p.id === activePromo)) {
       const next = projectList.find((p) => !p.raw || p.raw.status !== "archived") || projectList[0];
@@ -2209,6 +2487,7 @@ function ManagerApp({ onExit, onPreviewClient }) {
   useEffect(() => {
     if (activePromo) setActivePromotion(activePromo);
   }, [activePromo]);
+  const metrics = useDashboardMetrics(DATA_SOURCE === "supabase" ? activePromo : null);
   const markAlertRead = (id) => setAlertsRead((cur) => cur.includes(id) ? cur : [...cur, id]);
   const markAllAlertsRead = () => setAlertsRead(ALERTS.map((a) => a.id));
   const sendReminder = (idx) => {
@@ -2226,6 +2505,15 @@ function ManagerApp({ onExit, onPreviewClient }) {
       className: "inline-flex items-center justify-center w-7 h-7 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-900"
     },
     /* @__PURE__ */ React.createElement(Pencil, { className: "w-3.5 h-3.5" })
+  ), DATA_SOURCE === "supabase" && /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => setCreatePromoOpen(true),
+      title: "Create a new promotion",
+      className: "inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50"
+    },
+    /* @__PURE__ */ React.createElement(Plus, { className: "w-3.5 h-3.5" }),
+    "New"
   ), promoOpen && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "fixed inset-0 z-30", onClick: () => setPromoOpen(false) }), /* @__PURE__ */ React.createElement("div", { className: "absolute left-0 top-9 w-80 bg-white border border-slate-200 rounded-xl shadow-xl z-40" }, /* @__PURE__ */ React.createElement("div", { className: "px-3 py-2 border-b border-slate-100 text-xs font-semibold text-slate-500 uppercase tracking-wide flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Switch promotion"), projectsLoading && /* @__PURE__ */ React.createElement("span", { className: "text-[10px] text-slate-400 normal-case font-medium" }, "loading\u2026"), projectsError && /* @__PURE__ */ React.createElement("button", { onClick: reloadProjects, className: "text-[10px] text-rose-600 hover:text-rose-700 normal-case font-medium" }, "retry")), /* @__PURE__ */ React.createElement("ul", { className: "max-h-80 overflow-auto" }, visibleProjectList.length === 0 && !projectsLoading && /* @__PURE__ */ React.createElement("li", { className: "px-3 py-4 text-xs text-slate-500 text-center" }, "No active promotions"), visibleProjectList.map((p) => /* @__PURE__ */ React.createElement("li", { key: p.id }, /* @__PURE__ */ React.createElement(
     "button",
     {
@@ -2294,7 +2582,7 @@ function ManagerApp({ onExit, onPreviewClient }) {
       className: `px-3 py-2 text-sm font-medium border-b-2 whitespace-nowrap ${tab === t.id ? "border-slate-900 text-slate-900" : "border-transparent text-slate-500 hover:text-slate-900"}`
     },
     t.label
-  ))))), /* @__PURE__ */ React.createElement("main", { className: "flex-1 max-w-7xl w-full mx-auto px-6 py-6 space-y-6" }, tab === "overview" && /* @__PURE__ */ React.createElement(ManagerOverview, { reminderSent, onSendReminder: sendReminder }), tab === "live" && /* @__PURE__ */ React.createElement(ManagerLive, { airport: hero.airport, promoLabel: `${hero.brand} \u2014 ${hero.campaign}` }), tab === "promoters" && /* @__PURE__ */ React.createElement(ManagerPromoters, null), tab === "locations" && /* @__PURE__ */ React.createElement(ManagerLocations, null), tab === "insights" && /* @__PURE__ */ React.createElement(ManagerInsights, null), tab === "products" && /* @__PURE__ */ React.createElement(ManagerProducts, null), tab === "reports" && /* @__PURE__ */ React.createElement(ManagerReports, null), tab === "config" && /* @__PURE__ */ React.createElement(ManagerConfig, { activePromoId: activePromo, activePromoLabel: `${activePromoLabel.brand} \xB7 ${activePromoLabel.id}` })), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-7xl mx-auto px-6 py-3 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "UCM Backstage \xB7 Promotion Insights prototype"), /* @__PURE__ */ React.createElement("span", null, "Demo data \xB7 Numbers refresh from promoter daily reports"))), /* @__PURE__ */ React.createElement(
+  ))))), /* @__PURE__ */ React.createElement("main", { className: "flex-1 max-w-7xl w-full mx-auto px-6 py-6 space-y-6" }, tab === "overview" && /* @__PURE__ */ React.createElement(ManagerOverview, { reminderSent, onSendReminder: sendReminder, metrics, hero }), tab === "live" && /* @__PURE__ */ React.createElement(ManagerLive, { airport: hero.airport, promoLabel: `${hero.brand} \u2014 ${hero.campaign}`, metrics }), tab === "promoters" && /* @__PURE__ */ React.createElement(ManagerPromoters, { metrics, hero }), tab === "locations" && /* @__PURE__ */ React.createElement(ManagerLocations, { metrics, hero }), tab === "insights" && /* @__PURE__ */ React.createElement(ManagerInsights, { metrics }), tab === "products" && /* @__PURE__ */ React.createElement(ManagerProducts, { metrics }), tab === "reports" && /* @__PURE__ */ React.createElement(ManagerReports, { metrics, hero }), tab === "config" && /* @__PURE__ */ React.createElement(ManagerConfig, { activePromoId: activePromo, activePromoLabel: `${activePromoLabel.brand} \xB7 ${activePromoLabel.id}` })), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-7xl mx-auto px-6 py-3 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "UCM Backstage \xB7 Promotion Insights prototype"), /* @__PURE__ */ React.createElement("span", null, "Demo data \xB7 Numbers refresh from promoter daily reports"))), /* @__PURE__ */ React.createElement(
     Modal,
     {
       open: filtersOpen,
@@ -2308,20 +2596,20 @@ function ManagerApp({ onExit, onPreviewClient }) {
         addToast("Filters applied \u2014 dashboard refreshed", "blue");
       }, className: "px-3 py-1.5 text-sm bg-slate-900 text-white rounded-lg" }, "Apply"))
     },
-    /* @__PURE__ */ React.createElement("div", { className: "space-y-4 text-sm" }, /* @__PURE__ */ React.createElement(FilterGroup, { label: "Date range", value: filters.range, options: [["today", "Today"], ["7d", "Last 7 days"], ["campaign", "Entire campaign"], ["custom", "Custom\u2026"]], onChange: (v) => setFilters({ ...filters, range: v }) }), /* @__PURE__ */ React.createElement(FilterGroup, { label: "Location", value: filters.location, options: [["all", "All locations"], ["FRA-T2", "Frankfurt T2"], ["MUC-T2", "Munich T2"], ["HAM-A", "Hamburg Pier A"]], onChange: (v) => setFilters({ ...filters, location: v }) }), /* @__PURE__ */ React.createElement(FilterGroup, { label: "Promoter", value: filters.promoter, options: [["all", "All promoters"], ...candidateList.map((p) => [p.id, p.name])], onChange: (v) => setFilters({ ...filters, promoter: v }) }), /* @__PURE__ */ React.createElement(FilterGroup, { label: "Shift", value: filters.shift, options: [["all", "All shifts"], ["early", "Early (06\u201314)"], ["late", "Late (14\u201322)"]], onChange: (v) => setFilters({ ...filters, shift: v }) }))
+    /* @__PURE__ */ React.createElement("div", { className: "space-y-4 text-sm" }, /* @__PURE__ */ React.createElement(FilterGroup, { label: "Date range", value: filters.range, options: [["today", "Today"], ["7d", "Last 7 days"], ["campaign", "Entire campaign"], ["custom", "Custom\u2026"]], onChange: (v) => setFilters({ ...filters, range: v }) }), /* @__PURE__ */ React.createElement(FilterGroup, { label: "Location", value: filters.location, options: [["all", "All locations"], ["BER-T1-N", "BER T1 \xB7 North (Chanel Boutique)"], ["BER-T1-S", "BER T1 \xB7 South"]], onChange: (v) => setFilters({ ...filters, location: v }) }), /* @__PURE__ */ React.createElement(FilterGroup, { label: "Promoter", value: filters.promoter, options: [["all", "All promoters"], ...candidateList.map((p) => [p.id, p.name])], onChange: (v) => setFilters({ ...filters, promoter: v }) }), /* @__PURE__ */ React.createElement(FilterGroup, { label: "Shift", value: filters.shift, options: [["all", "All shifts"], ["early", "Early (06\u201314)"], ["late", "Late (14\u201322)"]], onChange: (v) => setFilters({ ...filters, shift: v }) }))
   ), /* @__PURE__ */ React.createElement(
     Modal,
     {
       open: briefingOpen,
       onClose: () => setBriefingOpen(false),
-      title: "Campaign briefing \u2014 Aurelle Paris \xD7 Heinemann",
+      title: "Campaign briefing \u2014 Chanel \xD7 Heinemann (Berlin BER)",
       size: "lg",
       footer: /* @__PURE__ */ React.createElement("button", { onClick: () => {
         setBriefingOpen(false);
         addToast("Briefing acknowledged", "green");
       }, className: "px-3 py-1.5 text-sm bg-slate-900 text-white rounded-lg" }, "Got it")
     },
-    /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-700 space-y-3 leading-relaxed" }, /* @__PURE__ */ React.createElement("p", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, "Objective."), " Drive trial of the Bloom EDP line through scent-led conversation, with a strong emphasis on the 100ml format and the discovery mini sample. Revenue target ", fmtEUR(PROMOTION.targetRevenue), " across the ", PROMOTION.startDate, " \u2192 ", PROMOTION.endDate, " window at Frankfurt T2."), /* @__PURE__ */ React.createElement("p", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, "Target customer."), " Female travellers 25\u201355, leisure & business, with a strong skew toward Far East and GCC departures. Mandarin/Arabic flyers should be on hand."), /* @__PURE__ */ React.createElement("p", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, "Booth."), " Heinemann DF Z-Gates. Stand setup photo must be taken before 09:00 daily. Opening stock per the briefing sheet \u2014 flag any deviation in the shift checklist."), /* @__PURE__ */ React.createElement("p", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, "Key talking points."), " Floral-fresh family, signature notes of jasmine sambac + bergamot, sustainable refill bottle (in-store starting June)."), /* @__PURE__ */ React.createElement("p", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, "Sampling."), " Up to 30 Discovery Minis per shift, 5 Body Lotion minis for confirmed buyers only."))
+    /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-700 space-y-3 leading-relaxed" }, /* @__PURE__ */ React.createElement("p", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, "Objective."), " Drive trial across the Chanel beauty portfolio (No.5, Coco Mademoiselle, Bleu de Chanel, Chance, Hydra Beauty) through scent-led conversation and travel-retail-exclusive bundles. Revenue target ", fmtEUR(PROMOTION.targetRevenue), " across the ", PROMOTION.startDate, " \u2192 ", PROMOTION.endDate, " window at Berlin BER \xB7 Terminal 1."), /* @__PURE__ */ React.createElement("p", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, "Target customer."), " Female travellers 25\u201355, leisure & business, with a strong skew toward Far East and GCC departures. Mandarin/Arabic flyers should be on hand."), /* @__PURE__ */ React.createElement("p", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, "Booth."), " Heinemann DF Z-Gates. Stand setup photo must be taken before 09:00 daily. Opening stock per the briefing sheet \u2014 flag any deviation in the shift checklist."), /* @__PURE__ */ React.createElement("p", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, "Key talking points."), " Floral-fresh family, signature notes of jasmine sambac + bergamot, sustainable refill bottle (in-store starting June)."), /* @__PURE__ */ React.createElement("p", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, "Sampling."), " Up to 30 No.5 Discovery samples per shift, 5 Hydra Beauty sachets for confirmed buyers only."))
   ), /* @__PURE__ */ React.createElement(
     EditPromotionModal,
     {
@@ -2331,6 +2619,17 @@ function ManagerApp({ onExit, onPreviewClient }) {
       onSaved: () => {
         setEditPromoOpen(false);
         reloadProjects();
+      }
+    }
+  ), /* @__PURE__ */ React.createElement(
+    CreatePromotionModal,
+    {
+      open: createPromoOpen,
+      onClose: () => setCreatePromoOpen(false),
+      onSaved: (created) => {
+        setCreatePromoOpen(false);
+        reloadProjects();
+        if (created && created.id) setActivePromo(created.id);
       }
     }
   ));
@@ -2392,7 +2691,70 @@ function EditPromotionModal({ open, onClose, promotion, onSaved }) {
       size: "lg",
       footer: /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", { onClick: onClose, disabled: saving, className: "px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50" }, "Cancel"), /* @__PURE__ */ React.createElement("button", { onClick: save, disabled: saving || !brand.trim() || !client.trim(), className: "px-3 py-1.5 text-sm bg-slate-900 text-white rounded-lg hover:bg-slate-800 disabled:opacity-50 inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Save, { className: "w-3.5 h-3.5" }), saving ? "Saving\u2026" : "Save"))
     },
-    /* @__PURE__ */ React.createElement("div", { className: "space-y-4 text-sm" }, /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Brand ", /* @__PURE__ */ React.createElement("span", { className: "text-rose-500" }, "*")), /* @__PURE__ */ React.createElement("input", { type: "text", value: brand, onChange: (e) => setBrand(e.target.value), required: true, className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Client ", /* @__PURE__ */ React.createElement("span", { className: "text-rose-500" }, "*")), /* @__PURE__ */ React.createElement("input", { type: "text", value: client, onChange: (e) => setClient(e.target.value), required: true, className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Location"), /* @__PURE__ */ React.createElement("input", { type: "text", value: location, onChange: (e) => setLocation(e.target.value), placeholder: "e.g. Frankfurt T2", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-3 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Start date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: startDate, onChange: (e) => setStartDate(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "End date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: endDate, onChange: (e) => setEndDate(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Status"), /* @__PURE__ */ React.createElement("select", { value: status, onChange: (e) => setStatus(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }, /* @__PURE__ */ React.createElement("option", { value: "active" }, "Active"), /* @__PURE__ */ React.createElement("option", { value: "paused" }, "Paused"), /* @__PURE__ */ React.createElement("option", { value: "done" }, "Done"), /* @__PURE__ */ React.createElement("option", { value: "archived" }, "Archived")))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Note"), /* @__PURE__ */ React.createElement("textarea", { value: note, onChange: (e) => setNote(e.target.value), rows: 2, className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), error && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2" }, error))
+    /* @__PURE__ */ React.createElement("div", { className: "space-y-4 text-sm" }, /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Brand ", /* @__PURE__ */ React.createElement("span", { className: "text-rose-500" }, "*")), /* @__PURE__ */ React.createElement("input", { type: "text", value: brand, onChange: (e) => setBrand(e.target.value), required: true, className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Client ", /* @__PURE__ */ React.createElement("span", { className: "text-rose-500" }, "*")), /* @__PURE__ */ React.createElement("input", { type: "text", value: client, onChange: (e) => setClient(e.target.value), required: true, className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Location"), /* @__PURE__ */ React.createElement("input", { type: "text", value: location, onChange: (e) => setLocation(e.target.value), placeholder: "e.g. Berlin BER \xB7 Terminal 1", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-3 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Start date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: startDate, onChange: (e) => setStartDate(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "End date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: endDate, onChange: (e) => setEndDate(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Status"), /* @__PURE__ */ React.createElement("select", { value: status, onChange: (e) => setStatus(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }, /* @__PURE__ */ React.createElement("option", { value: "active" }, "Active"), /* @__PURE__ */ React.createElement("option", { value: "paused" }, "Paused"), /* @__PURE__ */ React.createElement("option", { value: "done" }, "Done"), /* @__PURE__ */ React.createElement("option", { value: "archived" }, "Archived")))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Note"), /* @__PURE__ */ React.createElement("textarea", { value: note, onChange: (e) => setNote(e.target.value), rows: 2, className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), error && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2" }, error))
+  );
+}
+function CreatePromotionModal({ open, onClose, onSaved }) {
+  const [code, setCode] = useState("");
+  const [brand, setBrand] = useState("");
+  const [client, setClient] = useState("");
+  const [location, setLocation] = useState("");
+  const [note, setNote] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [status, setStatus] = useState("active");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    if (open) {
+      const yr = (/* @__PURE__ */ new Date()).getFullYear();
+      const suggestion = `P-${yr}-${Math.floor(Math.random() * 90 + 10)}`;
+      setCode(suggestion);
+      setBrand("");
+      setClient("");
+      setLocation("");
+      setNote("");
+      setStartDate("");
+      setEndDate("");
+      setStatus("active");
+      setError(null);
+    }
+  }, [open]);
+  if (!open) return null;
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const payload = {
+        code: code.trim() || null,
+        brand: brand.trim(),
+        client: client.trim(),
+        location: location.trim() || null,
+        note: note.trim() || null,
+        start_date: startDate || null,
+        end_date: endDate || null,
+        status
+      };
+      const created = await SupabaseAPI.createPromotion(payload);
+      addToast(`Promotion "${created.brand}" created`, "green");
+      onSaved && onSaved(created);
+    } catch (err) {
+      setError(err.message || String(err));
+      addToast(`Create failed: ${err.message || err}`, "rose");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return /* @__PURE__ */ React.createElement(
+    Modal,
+    {
+      open,
+      onClose,
+      title: "New promotion",
+      size: "lg",
+      footer: /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", { onClick: onClose, disabled: saving, className: "px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50" }, "Cancel"), /* @__PURE__ */ React.createElement("button", { onClick: save, disabled: saving || !brand.trim() || !client.trim(), className: "px-3 py-1.5 text-sm bg-slate-900 text-white rounded-lg hover:bg-slate-800 disabled:opacity-50 inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Save, { className: "w-3.5 h-3.5" }), saving ? "Creating\u2026" : "Create"))
+    },
+    /* @__PURE__ */ React.createElement("div", { className: "space-y-4 text-sm" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Code ", /* @__PURE__ */ React.createElement("span", { className: "text-slate-400" }, "(internal reference)")), /* @__PURE__ */ React.createElement("input", { type: "text", value: code, onChange: (e) => setCode(e.target.value), placeholder: "e.g. P-2026-07", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Brand ", /* @__PURE__ */ React.createElement("span", { className: "text-rose-500" }, "*")), /* @__PURE__ */ React.createElement("input", { type: "text", value: brand, onChange: (e) => setBrand(e.target.value), required: true, placeholder: "e.g. Chanel", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Client ", /* @__PURE__ */ React.createElement("span", { className: "text-rose-500" }, "*")), /* @__PURE__ */ React.createElement("input", { type: "text", value: client, onChange: (e) => setClient(e.target.value), required: true, placeholder: "e.g. Gebr. Heinemann", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Location"), /* @__PURE__ */ React.createElement("input", { type: "text", value: location, onChange: (e) => setLocation(e.target.value), placeholder: "e.g. Berlin BER \xB7 Terminal 1 \xB7 Heinemann Duty Free", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }), /* @__PURE__ */ React.createElement("div", { className: "text-[11px] text-slate-400 mt-1" }, 'Tip: use "Airport \xB7 Terminal \xB7 Booth" \u2014 the dashboard splits on " \xB7 " for the hero block.')), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-3 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Start date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: startDate, onChange: (e) => setStartDate(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "End date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: endDate, onChange: (e) => setEndDate(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Status"), /* @__PURE__ */ React.createElement("select", { value: status, onChange: (e) => setStatus(e.target.value), className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" }, /* @__PURE__ */ React.createElement("option", { value: "active" }, "Active"), /* @__PURE__ */ React.createElement("option", { value: "paused" }, "Paused"), /* @__PURE__ */ React.createElement("option", { value: "done" }, "Done"), /* @__PURE__ */ React.createElement("option", { value: "archived" }, "Archived")))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-xs font-medium text-slate-600 mb-1" }, "Note"), /* @__PURE__ */ React.createElement("textarea", { value: note, onChange: (e) => setNote(e.target.value), rows: 2, placeholder: "Short internal description, e.g. 'Chanel brand boutique pilot \u2014 BER'", className: "w-full border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900" })), error && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2" }, error), /* @__PURE__ */ React.createElement("div", { className: "text-[11px] text-slate-500 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2" }, "After creating, you can assign products, promoters and shifts from the Configuration tab."))
   );
 }
 function FilterGroup({ label, value, options, onChange }) {
@@ -2407,26 +2769,60 @@ function FilterGroup({ label, value, options, onChange }) {
   ))));
 }
 function ManagerOverview({ reminderSent = {}, onSendReminder = () => {
-} }) {
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 md:grid-cols-5 gap-4" }, /* @__PURE__ */ React.createElement(StatCard, { label: "Revenue", value: fmtEUR(totalRevenue), sub: `Target ${fmtEUR(PROMOTION.targetRevenue)}`, icon: Target, tone: "blue", trend: { up: true, label: `${targetPct}% of target` } }), /* @__PURE__ */ React.createElement(StatCard, { label: "Units sold", value: totalUnits, sub: `across ${PRODUCT_PERFORMANCE.length} SKUs`, icon: Package, tone: "purple" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Customer contacts", value: totalContacts, sub: "logged this promotion", icon: Users, tone: "green" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Conversion", value: `${conversionRate}%`, sub: "units / contacts", icon: TrendingUp, tone: "amber" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Lost revenue (OOS)", value: fmtEUR(totalLostRevenue), sub: "estimated", icon: AlertTriangle, tone: "rose" })), /* @__PURE__ */ React.createElement(SectionCard, { title: "Target achievement" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-end justify-between mb-2" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-600" }, fmtEUR(totalRevenue), " of ", fmtEUR(PROMOTION.targetRevenue)), /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold" }, targetPct, "%")), /* @__PURE__ */ React.createElement(ProgressBar, { pct: targetPct, tone: targetPct >= 100 ? "green" : targetPct >= 75 ? "blue" : "amber" }), /* @__PURE__ */ React.createElement("div", { className: "mt-2 text-xs text-slate-500" }, Math.max(0, PROMOTION.targetRevenue - totalRevenue) > 0 ? `${fmtEUR(PROMOTION.targetRevenue - totalRevenue)} to go \xB7 4 promotion days remaining` : `Target exceeded by ${fmtEUR(totalRevenue - PROMOTION.targetRevenue)}`)), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-3 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Daily revenue", className: "lg:col-span-2" }, /* @__PURE__ */ React.createElement("div", { className: "h-64" }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(AreaChart, { data: DAILY_REVENUE }, /* @__PURE__ */ React.createElement("defs", null, /* @__PURE__ */ React.createElement("linearGradient", { id: "rev", x1: "0", y1: "0", x2: "0", y2: "1" }, /* @__PURE__ */ React.createElement("stop", { offset: "0%", stopColor: "#1e40af", stopOpacity: 0.35 }), /* @__PURE__ */ React.createElement("stop", { offset: "100%", stopColor: "#1e40af", stopOpacity: 0 }))), /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9" }), /* @__PURE__ */ React.createElement(XAxis, { dataKey: "day", tick: { fontSize: 11 }, stroke: "#94a3b8" }), /* @__PURE__ */ React.createElement(YAxis, { tick: { fontSize: 11 }, stroke: "#94a3b8", tickFormatter: (v) => "\u20AC" + v }), /* @__PURE__ */ React.createElement(Tooltip, { formatter: (v) => fmtEUR(v), contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Area, { type: "monotone", dataKey: "revenue", stroke: "#1e40af", strokeWidth: 2, fill: "url(#rev)" }))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Sales by promoter" }, /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, PROMOTER_PERFORMANCE.map((p) => {
-    const max = Math.max(...PROMOTER_PERFORMANCE.map((x) => x.revenue));
-    const pct = p.revenue / max * 100;
-    return /* @__PURE__ */ React.createElement("div", { key: p.name }, /* @__PURE__ */ React.createElement("div", { className: "flex justify-between text-sm mb-1" }, /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, p.name), /* @__PURE__ */ React.createElement("span", { className: "text-slate-600" }, fmtEUR(p.revenue), " \xB7 ", p.units, "u")), /* @__PURE__ */ React.createElement(ProgressBar, { pct, tone: "blue" }), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-0.5" }, p.contacts, " contacts \xB7 ", (p.units / p.contacts * 100).toFixed(1), "% conv."));
-  })))), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Missing daily reports", action: /* @__PURE__ */ React.createElement(Pill, { tone: MISSING_REPORTS.length > 0 ? "rose" : "green" }, MISSING_REPORTS.length) }, MISSING_REPORTS.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-500" }, "All daily reports submitted.") : /* @__PURE__ */ React.createElement("ul", { className: "space-y-2" }, MISSING_REPORTS.map((m, i) => {
-    const sent = reminderSent[i];
-    return /* @__PURE__ */ React.createElement("li", { key: i, className: "flex items-center justify-between text-sm border border-slate-100 rounded-lg px-3 py-2" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, m.promoter), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, m.date, " \xB7 ", m.shift, " shift")), sent ? /* @__PURE__ */ React.createElement("span", { className: "text-xs font-medium text-emerald-600 inline-flex items-center gap-1" }, /* @__PURE__ */ React.createElement(Check, { className: "w-3.5 h-3.5" }), " Reminder sent") : /* @__PURE__ */ React.createElement("button", { onClick: () => onSendReminder(i), className: "text-xs font-medium text-blue-600 hover:underline" }, "Send reminder"));
-  }))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Customer quotes (selected)" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-3" }, QUOTES.slice(0, 3).map((q, i) => /* @__PURE__ */ React.createElement("li", { key: i, className: "border-l-2 border-amber-400 pl-3" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm italic text-slate-800" }, '"', q.quote, '"'), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-0.5" }, q.who, " \xB7 captured by ", q.promoter)))))));
+}, metrics, hero }) {
+  const isLive = DATA_SOURCE === "supabase" && metrics && (metrics.sales || metrics.shifts);
+  const target = hero && hero.targetRevenue || PROMOTION.targetRevenue;
+  const liveTotals = isLive ? aggregateTotals(metrics.sales, metrics.shifts, metrics.notes, PRODUCT_CATALOG, target) : null;
+  const liveProducts = isLive ? aggregateProductPerformance(metrics.sales, PRODUCT_CATALOG) : null;
+  const revenue = liveTotals ? liveTotals.revenue : totalRevenue;
+  const units = liveTotals ? liveTotals.units : totalUnits;
+  const contacts = liveTotals ? liveTotals.contacts : totalContacts;
+  const lostRev = liveTotals ? liveTotals.lostRevenue : totalLostRevenue;
+  const productCount = liveProducts ? liveProducts.length : PRODUCT_PERFORMANCE.length;
+  const pct = liveTotals ? Math.round(liveTotals.progress * 100) : Number(targetPct);
+  const conv = liveTotals ? liveTotals.contacts > 0 ? (liveTotals.units / liveTotals.contacts * 100).toFixed(1) : "0.0" : conversionRate;
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, isLive && metrics.loading && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 italic" }, "Loading live metrics\u2026"), isLive && metrics.error && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Couldn't load live metrics: ", metrics.error), /* @__PURE__ */ React.createElement("button", { onClick: metrics.reload, className: "font-semibold hover:underline" }, "Retry")), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 md:grid-cols-5 gap-4" }, /* @__PURE__ */ React.createElement(StatCard, { label: "Revenue", value: fmtEUR(revenue), sub: `Target ${fmtEUR(target)}`, icon: Target, tone: "blue", trend: { up: true, label: `${pct}% of target` } }), /* @__PURE__ */ React.createElement(StatCard, { label: "Units sold", value: units, sub: `across ${productCount} SKUs`, icon: Package, tone: "purple" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Customer contacts", value: contacts, sub: "logged this promotion", icon: Users, tone: "green" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Conversion", value: `${conv}%`, sub: "units / contacts", icon: TrendingUp, tone: "amber" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Lost revenue (OOS)", value: fmtEUR(lostRev), sub: "estimated", icon: AlertTriangle, tone: "rose" })), /* @__PURE__ */ React.createElement(SectionCard, { title: "Target achievement" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-end justify-between mb-2" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-600" }, fmtEUR(revenue), " of ", fmtEUR(target)), /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold" }, pct, "%")), /* @__PURE__ */ React.createElement(ProgressBar, { pct, tone: pct >= 100 ? "green" : pct >= 75 ? "blue" : "amber" }), /* @__PURE__ */ React.createElement("div", { className: "mt-2 text-xs text-slate-500" }, Math.max(0, target - revenue) > 0 ? `${fmtEUR(target - revenue)} to go` : `Target exceeded by ${fmtEUR(revenue - target)}`)), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-3 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Daily revenue", className: "lg:col-span-2" }, /* @__PURE__ */ React.createElement("div", { className: "h-64" }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(AreaChart, { data: DAILY_REVENUE }, /* @__PURE__ */ React.createElement("defs", null, /* @__PURE__ */ React.createElement("linearGradient", { id: "rev", x1: "0", y1: "0", x2: "0", y2: "1" }, /* @__PURE__ */ React.createElement("stop", { offset: "0%", stopColor: "#1e40af", stopOpacity: 0.35 }), /* @__PURE__ */ React.createElement("stop", { offset: "100%", stopColor: "#1e40af", stopOpacity: 0 }))), /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9" }), /* @__PURE__ */ React.createElement(XAxis, { dataKey: "day", tick: { fontSize: 11 }, stroke: "#94a3b8" }), /* @__PURE__ */ React.createElement(YAxis, { tick: { fontSize: 11 }, stroke: "#94a3b8", tickFormatter: (v) => "\u20AC" + v }), /* @__PURE__ */ React.createElement(Tooltip, { formatter: (v) => fmtEUR(v), contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Area, { type: "monotone", dataKey: "revenue", stroke: "#1e40af", strokeWidth: 2, fill: "url(#rev)" }))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Sales by promoter" }, /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, (() => {
+    const rows = isLive ? aggregatePromoterPerformance(metrics.sales, metrics.shifts, metrics.notes, PRODUCT_CATALOG) : PROMOTER_PERFORMANCE;
+    if (!rows || rows.length === 0) {
+      return /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-500 italic" }, "No promoter sales yet.");
+    }
+    const max = Math.max(1, ...rows.map((x) => x.revenue));
+    return rows.map((p) => {
+      const barPct = p.revenue / max * 100;
+      const contacts2 = p.contacts || 0;
+      return /* @__PURE__ */ React.createElement("div", { key: p.name }, /* @__PURE__ */ React.createElement("div", { className: "flex justify-between text-sm mb-1" }, /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, p.name), /* @__PURE__ */ React.createElement("span", { className: "text-slate-600" }, fmtEUR(p.revenue), " \xB7 ", p.units, "u")), /* @__PURE__ */ React.createElement(ProgressBar, { pct: barPct, tone: "blue" }), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-0.5" }, contacts2, " contacts \xB7 ", contacts2 > 0 ? (p.units / contacts2 * 100).toFixed(1) : "0.0", "% conv."));
+    });
+  })()))), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-2 gap-4" }, (() => {
+    const liveGaps = isLive ? aggregateGaps(metrics.shifts) : null;
+    const rows = liveGaps || MISSING_REPORTS;
+    return /* @__PURE__ */ React.createElement(SectionCard, { title: "Missing daily reports", action: /* @__PURE__ */ React.createElement(Pill, { tone: rows.length > 0 ? "rose" : "green" }, rows.length) }, rows.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-500" }, "All daily reports submitted.") : /* @__PURE__ */ React.createElement("ul", { className: "space-y-2" }, rows.map((m, i) => {
+      const sent = reminderSent[i];
+      return /* @__PURE__ */ React.createElement("li", { key: m.id || i, className: "flex items-center justify-between text-sm border border-slate-100 rounded-lg px-3 py-2" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, m.promoter), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, m.date, " \xB7 ", m.shift || m.status || "shift")), sent ? /* @__PURE__ */ React.createElement("span", { className: "text-xs font-medium text-emerald-600 inline-flex items-center gap-1" }, /* @__PURE__ */ React.createElement(Check, { className: "w-3.5 h-3.5" }), " Reminder sent") : /* @__PURE__ */ React.createElement("button", { onClick: () => onSendReminder(i), className: "text-xs font-medium text-blue-600 hover:underline" }, "Send reminder"));
+    })));
+  })(), /* @__PURE__ */ React.createElement(SectionCard, { title: "Customer quotes (selected)" }, (() => {
+    const liveQuotes = isLive ? aggregateQuotes(metrics.notes).slice(0, 3) : null;
+    const rows = liveQuotes && liveQuotes.length > 0 ? liveQuotes : QUOTES.slice(0, 3);
+    if (rows.length === 0) {
+      return /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-500 italic" }, "No customer quotes captured yet.");
+    }
+    return /* @__PURE__ */ React.createElement("ul", { className: "space-y-3" }, rows.map((q, i) => /* @__PURE__ */ React.createElement("li", { key: i, className: "border-l-2 border-amber-400 pl-3" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm italic text-slate-800" }, '"', q.text || q.quote, '"'), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-0.5" }, q.who || "\u2014", " \xB7 captured by ", q.promoter || "\u2014"))));
+  })())));
 }
-function ManagerProducts() {
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Sales by product" }, /* @__PURE__ */ React.createElement("div", { className: "h-64" }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(BarChart, { data: PRODUCT_PERFORMANCE, layout: "vertical", margin: { left: 10 } }, /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9", horizontal: false }), /* @__PURE__ */ React.createElement(XAxis, { type: "number", tick: { fontSize: 11 }, stroke: "#94a3b8", tickFormatter: (v) => "\u20AC" + v }), /* @__PURE__ */ React.createElement(YAxis, { type: "category", dataKey: "name", width: 130, tick: { fontSize: 11 }, stroke: "#475569" }), /* @__PURE__ */ React.createElement(Tooltip, { formatter: (v) => fmtEUR(v), contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Bar, { dataKey: "revenue", fill: "#1e40af", radius: [0, 4, 4, 0] }))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Units sold by product" }, /* @__PURE__ */ React.createElement("div", { className: "h-64" }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(BarChart, { data: PRODUCT_PERFORMANCE }, /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9" }), /* @__PURE__ */ React.createElement(XAxis, { dataKey: "name", tick: { fontSize: 10 }, stroke: "#94a3b8", interval: 0, angle: -15, textAnchor: "end", height: 60 }), /* @__PURE__ */ React.createElement(YAxis, { tick: { fontSize: 11 }, stroke: "#94a3b8" }), /* @__PURE__ */ React.createElement(Tooltip, { contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Bar, { dataKey: "units", fill: "#0891b2", radius: [4, 4, 0, 0] })))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Promoter leaderboard" }, /* @__PURE__ */ React.createElement("div", { className: "overflow-x-auto" }, /* @__PURE__ */ React.createElement("table", { className: "w-full text-sm" }, /* @__PURE__ */ React.createElement("thead", { className: "text-left text-xs text-slate-500 uppercase tracking-wide border-b border-slate-100" }, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { className: "py-2" }, "Promoter"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Units"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Revenue"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Contacts"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Conversion"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "\u20AC / contact"))), /* @__PURE__ */ React.createElement("tbody", null, PROMOTER_PERFORMANCE.map((p) => /* @__PURE__ */ React.createElement("tr", { key: p.name, className: "border-b border-slate-50 last:border-0" }, /* @__PURE__ */ React.createElement("td", { className: "py-2.5 font-medium" }, p.name), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, p.units), /* @__PURE__ */ React.createElement("td", { className: "text-right font-semibold" }, fmtEUR(p.revenue)), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, p.contacts), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, (p.units / p.contacts * 100).toFixed(1), "%"), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, fmtEUR(p.revenue / p.contacts)))))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Product master", action: /* @__PURE__ */ React.createElement("button", { onClick: () => addToast("Opening EAN catalogue editor\u2026", "blue"), className: "text-xs font-medium text-blue-600 hover:underline" }, "Manage EAN list") }, /* @__PURE__ */ React.createElement("table", { className: "w-full text-sm" }, /* @__PURE__ */ React.createElement("thead", { className: "text-left text-xs text-slate-500 uppercase tracking-wide border-b border-slate-100" }, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { className: "py-2" }, "Product"), /* @__PURE__ */ React.createElement("th", null, "EAN"), /* @__PURE__ */ React.createElement("th", null, "Category"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Price"))), /* @__PURE__ */ React.createElement("tbody", null, PRODUCTS.map((p) => /* @__PURE__ */ React.createElement("tr", { key: p.ean, className: "border-b border-slate-50 last:border-0" }, /* @__PURE__ */ React.createElement("td", { className: "py-2.5 font-medium" }, p.name), /* @__PURE__ */ React.createElement("td", { className: "font-mono text-xs text-slate-600" }, p.ean), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(Pill, { tone: "slate" }, p.category)), /* @__PURE__ */ React.createElement("td", { className: "text-right font-semibold" }, fmtEUR(p.price))))))));
+function ManagerProducts({ metrics }) {
+  const isLive = DATA_SOURCE === "supabase" && metrics && (metrics.sales || metrics.shifts);
+  const productRows = isLive ? aggregateProductPerformance(metrics.sales, PRODUCT_CATALOG) : PRODUCT_PERFORMANCE;
+  const promoterRows = isLive ? aggregatePromoterPerformance(metrics.sales, metrics.shifts, metrics.notes, PRODUCT_CATALOG) : PROMOTER_PERFORMANCE;
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, isLive && metrics.loading && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 italic" }, "Loading live product data\u2026"), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Sales by product" }, /* @__PURE__ */ React.createElement("div", { className: "h-64" }, productRows.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "h-full flex items-center justify-center text-sm text-slate-500 italic" }, "No sales tracked yet for this promotion.") : /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(BarChart, { data: productRows, layout: "vertical", margin: { left: 10 } }, /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9", horizontal: false }), /* @__PURE__ */ React.createElement(XAxis, { type: "number", tick: { fontSize: 11 }, stroke: "#94a3b8", tickFormatter: (v) => "\u20AC" + v }), /* @__PURE__ */ React.createElement(YAxis, { type: "category", dataKey: "name", width: 130, tick: { fontSize: 11 }, stroke: "#475569" }), /* @__PURE__ */ React.createElement(Tooltip, { formatter: (v) => fmtEUR(v), contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Bar, { dataKey: "revenue", fill: "#1e40af", radius: [0, 4, 4, 0] }))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Units sold by product" }, /* @__PURE__ */ React.createElement("div", { className: "h-64" }, productRows.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "h-full flex items-center justify-center text-sm text-slate-500 italic" }, "\u2014") : /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(BarChart, { data: productRows }, /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9" }), /* @__PURE__ */ React.createElement(XAxis, { dataKey: "name", tick: { fontSize: 10 }, stroke: "#94a3b8", interval: 0, angle: -15, textAnchor: "end", height: 60 }), /* @__PURE__ */ React.createElement(YAxis, { tick: { fontSize: 11 }, stroke: "#94a3b8" }), /* @__PURE__ */ React.createElement(Tooltip, { contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Bar, { dataKey: "units", fill: "#0891b2", radius: [4, 4, 0, 0] })))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Promoter leaderboard" }, /* @__PURE__ */ React.createElement("div", { className: "overflow-x-auto" }, /* @__PURE__ */ React.createElement("table", { className: "w-full text-sm" }, /* @__PURE__ */ React.createElement("thead", { className: "text-left text-xs text-slate-500 uppercase tracking-wide border-b border-slate-100" }, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { className: "py-2" }, "Promoter"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Units"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Revenue"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Contacts"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Conversion"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "\u20AC / contact"))), /* @__PURE__ */ React.createElement("tbody", null, promoterRows.length === 0 ? /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("td", { colSpan: 6, className: "py-4 text-center text-slate-500 italic" }, "No promoter data yet")) : promoterRows.map((p) => /* @__PURE__ */ React.createElement("tr", { key: p.id || p.name, className: "border-b border-slate-50 last:border-0" }, /* @__PURE__ */ React.createElement("td", { className: "py-2.5 font-medium" }, p.name), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, p.units), /* @__PURE__ */ React.createElement("td", { className: "text-right font-semibold" }, fmtEUR(p.revenue)), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, p.contacts), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, p.contacts > 0 ? (p.units / p.contacts * 100).toFixed(1) : "0.0", "%"), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, p.contacts > 0 ? fmtEUR(p.revenue / p.contacts) : "\u2014"))))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Product master", action: /* @__PURE__ */ React.createElement("button", { onClick: () => addToast("Opening EAN catalogue editor\u2026", "blue"), className: "text-xs font-medium text-blue-600 hover:underline" }, "Manage EAN list") }, /* @__PURE__ */ React.createElement("table", { className: "w-full text-sm" }, /* @__PURE__ */ React.createElement("thead", { className: "text-left text-xs text-slate-500 uppercase tracking-wide border-b border-slate-100" }, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { className: "py-2" }, "Product"), /* @__PURE__ */ React.createElement("th", null, "EAN"), /* @__PURE__ */ React.createElement("th", null, "Category"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Price"))), /* @__PURE__ */ React.createElement("tbody", null, PRODUCTS.map((p) => /* @__PURE__ */ React.createElement("tr", { key: p.ean, className: "border-b border-slate-50 last:border-0" }, /* @__PURE__ */ React.createElement("td", { className: "py-2.5 font-medium" }, p.name), /* @__PURE__ */ React.createElement("td", { className: "font-mono text-xs text-slate-600" }, p.ean), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(Pill, { tone: "slate" }, p.category)), /* @__PURE__ */ React.createElement("td", { className: "text-right font-semibold" }, fmtEUR(p.price))))))));
 }
-function ManagerInsights() {
+function ManagerInsights({ metrics }) {
   const [quoteVisibility, setQuoteVisibility] = useState(() => QUOTES.map((q) => q.clientVisible));
   const toggleQuote = (i) => {
     setQuoteVisibility((cur) => cur.map((v, idx) => idx === i ? !v : v));
     addToast("Quote visibility updated", "blue");
   };
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Customer demographics \u2014 gender" }, /* @__PURE__ */ React.createElement("div", { className: "h-56" }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(PieChart, null, /* @__PURE__ */ React.createElement(Pie, { data: DEMOGRAPHICS_GENDER, dataKey: "value", nameKey: "name", cx: "50%", cy: "50%", innerRadius: 45, outerRadius: 75, paddingAngle: 2 }, DEMOGRAPHICS_GENDER.map((_, i) => /* @__PURE__ */ React.createElement(Cell, { key: i, fill: CHART_COLORS[i] }))), /* @__PURE__ */ React.createElement(Tooltip, { formatter: (v) => `${v}%`, contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Legend, { iconType: "circle", wrapperStyle: { fontSize: 12 } }))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Customer demographics \u2014 age" }, /* @__PURE__ */ React.createElement("div", { className: "h-56" }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(BarChart, { data: DEMOGRAPHICS_AGE }, /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9" }), /* @__PURE__ */ React.createElement(XAxis, { dataKey: "name", tick: { fontSize: 11 }, stroke: "#94a3b8" }), /* @__PURE__ */ React.createElement(YAxis, { tick: { fontSize: 11 }, stroke: "#94a3b8", tickFormatter: (v) => v + "%" }), /* @__PURE__ */ React.createElement(Tooltip, { formatter: (v) => v + "%", contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Bar, { dataKey: "value", fill: "#c026d3", radius: [4, 4, 0, 0] })))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Why customers did not buy" }, /* @__PURE__ */ React.createElement("div", { className: "space-y-2.5" }, NON_PURCHASE_REASONS.map((r) => {
+  const isLive = DATA_SOURCE === "supabase" && metrics && metrics.notes;
+  const liveQuotes = isLive ? aggregateQuotes(metrics.notes) : null;
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, isLive && liveQuotes && liveQuotes.length > 0 && /* @__PURE__ */ React.createElement(SectionCard, { title: "Live customer quotes (from this promotion)" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-3" }, liveQuotes.slice(0, 5).map((q, i) => /* @__PURE__ */ React.createElement("li", { key: i, className: "border-l-2 border-blue-400 pl-3" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm italic text-slate-800" }, '"', q.text, '"'), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-0.5" }, "captured by ", q.promoter))))), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Customer demographics \u2014 gender" }, /* @__PURE__ */ React.createElement("div", { className: "h-56" }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(PieChart, null, /* @__PURE__ */ React.createElement(Pie, { data: DEMOGRAPHICS_GENDER, dataKey: "value", nameKey: "name", cx: "50%", cy: "50%", innerRadius: 45, outerRadius: 75, paddingAngle: 2 }, DEMOGRAPHICS_GENDER.map((_, i) => /* @__PURE__ */ React.createElement(Cell, { key: i, fill: CHART_COLORS[i] }))), /* @__PURE__ */ React.createElement(Tooltip, { formatter: (v) => `${v}%`, contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Legend, { iconType: "circle", wrapperStyle: { fontSize: 12 } }))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Customer demographics \u2014 age" }, /* @__PURE__ */ React.createElement("div", { className: "h-56" }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(BarChart, { data: DEMOGRAPHICS_AGE }, /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9" }), /* @__PURE__ */ React.createElement(XAxis, { dataKey: "name", tick: { fontSize: 11 }, stroke: "#94a3b8" }), /* @__PURE__ */ React.createElement(YAxis, { tick: { fontSize: 11 }, stroke: "#94a3b8", tickFormatter: (v) => v + "%" }), /* @__PURE__ */ React.createElement(Tooltip, { formatter: (v) => v + "%", contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Bar, { dataKey: "value", fill: "#c026d3", radius: [4, 4, 0, 0] })))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Why customers did not buy" }, /* @__PURE__ */ React.createElement("div", { className: "space-y-2.5" }, NON_PURCHASE_REASONS.map((r) => {
     const max = Math.max(...NON_PURCHASE_REASONS.map((x) => x.count));
     const pct = r.count / max * 100;
     return /* @__PURE__ */ React.createElement("div", { key: r.reason }, /* @__PURE__ */ React.createElement("div", { className: "flex justify-between text-sm mb-1" }, /* @__PURE__ */ React.createElement("span", { className: "text-slate-800" }, r.reason), /* @__PURE__ */ React.createElement("span", { className: "text-slate-600 font-medium" }, r.count)), /* @__PURE__ */ React.createElement(ProgressBar, { pct, tone: "amber" }));
@@ -2598,24 +2994,27 @@ function AlertsDropdown({ onClose, alertsRead = [], onMarkRead = () => {
     addToast("Opening alerts archive\u2026", "blue");
   }, className: "text-sm text-blue-600 font-medium hover:underline" }, "View all")));
 }
-function ManagerLive({ airport, promoLabel }) {
+function ManagerLive({ airport, promoLabel, metrics }) {
   const statusTone = { "ahead": "green", "on-track": "amber", "behind": "rose" };
   const statusLabel = { "ahead": "Ahead of pace", "on-track": "On track", "behind": "Behind pace" };
   const [refreshInterval, setRefreshInterval] = useState("30s");
   const [lastUpdated, setLastUpdated] = useState("13:42 CET");
   const [tick, setTick] = useState(0);
   const departures = useDepartures(airport);
+  const isLive = DATA_SOURCE === "supabase" && metrics && metrics.shifts;
+  const livePromoters = isLive ? aggregateLive(metrics.shifts) : LIVE_PROMOTERS;
   const refreshNow = () => {
     const now = /* @__PURE__ */ new Date();
     const t = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     setLastUpdated(t + " local");
     setTick((x) => x + 1);
+    if (isLive && metrics.reload) metrics.reload();
     addToast("Live data refreshed", "blue");
   };
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between bg-white border border-slate-200 rounded-xl px-4 py-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-3" }, /* @__PURE__ */ React.createElement("span", { className: "relative flex h-2.5 w-2.5" }, /* @__PURE__ */ React.createElement("span", { className: "absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" }), /* @__PURE__ */ React.createElement("span", { className: "relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold" }, "Live \xB7 Wednesday, 13 May 2026 \xB7 ", lastUpdated), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, LIVE_PROMOTERS.length, " promoters on shift across ", new Set(LIVE_PROMOTERS.map((p) => p.cluster)).size, " locations \xB7 refresh ", refreshInterval))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement("select", { value: refreshInterval, onChange: (e) => {
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between bg-white border border-slate-200 rounded-xl px-4 py-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-3" }, /* @__PURE__ */ React.createElement("span", { className: "relative flex h-2.5 w-2.5" }, /* @__PURE__ */ React.createElement("span", { className: "absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" }), /* @__PURE__ */ React.createElement("span", { className: "relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold" }, "Live \xB7 Wednesday, 13 May 2026 \xB7 ", lastUpdated), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, livePromoters.length, " promoters on shift across ", new Set(livePromoters.map((p) => p.cluster)).size, " locations \xB7 refresh ", refreshInterval))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement("select", { value: refreshInterval, onChange: (e) => {
     setRefreshInterval(e.target.value);
     addToast(`Refresh set to ${e.target.value}`, "blue");
-  }, className: "border border-slate-300 rounded-lg px-2 py-1 text-sm" }, /* @__PURE__ */ React.createElement("option", { value: "30s" }, "Refresh every 30s"), /* @__PURE__ */ React.createElement("option", { value: "5m" }, "Refresh every 5 min"), /* @__PURE__ */ React.createElement("option", { value: "manual" }, "Manual")), /* @__PURE__ */ React.createElement("button", { onClick: refreshNow, className: "px-3 py-1.5 rounded-lg border border-slate-300 text-sm hover:bg-slate-50" }, "Refresh now"))), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-3 gap-4" }, /* @__PURE__ */ React.createElement("div", { className: "lg:col-span-2 space-y-3" }, LIVE_PROMOTERS.map((p) => /* @__PURE__ */ React.createElement("div", { key: p.id, className: `bg-white border-l-4 ${p.status === "ahead" ? "border-emerald-500" : p.status === "behind" ? "border-rose-500" : "border-amber-500"} border-t border-r border-b border-slate-200 rounded-xl p-4` }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between flex-wrap gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "relative" }, /* @__PURE__ */ React.createElement("div", { className: "w-10 h-10 rounded-full bg-slate-900 text-white text-sm font-semibold flex items-center justify-center" }, p.initials), /* @__PURE__ */ React.createElement("span", { className: "absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 border-2 border-white" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold" }, p.name), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, p.cluster, " \xB7 ", p.booth))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-4 text-sm" }, /* @__PURE__ */ React.createElement("div", { className: "text-right" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "Sales"), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, p.sales, " ", /* @__PURE__ */ React.createElement("span", { className: "text-xs text-slate-500" }, "/ exp. ", p.expected))), /* @__PURE__ */ React.createElement("div", { className: "text-right" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "Approaches"), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, p.approaches)), /* @__PURE__ */ React.createElement("div", { className: "text-right" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "Interest"), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, p.interest)), /* @__PURE__ */ React.createElement("div", { className: "text-right" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "On shift"), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, p.duration)), /* @__PURE__ */ React.createElement(Pill, { tone: statusTone[p.status] }, statusLabel[p.status])))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Activity feed", action: /* @__PURE__ */ React.createElement(Pill, { tone: "green" }, "Live") }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-3 max-h-96 overflow-auto" }, ACTIVITY_FEED.map((a, i) => /* @__PURE__ */ React.createElement("li", { key: i, className: "flex items-start gap-2" }, /* @__PURE__ */ React.createElement("div", { className: `mt-1 w-2 h-2 rounded-full ${a.tone === "green" ? "bg-emerald-500" : a.tone === "amber" ? "bg-amber-500" : a.tone === "rose" ? "bg-rose-500" : a.tone === "blue" ? "bg-blue-500" : "bg-slate-400"}` }), /* @__PURE__ */ React.createElement("div", { className: "text-sm flex-1" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, a.who), " ", a.what), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, a.detail), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-400 mt-0.5" }, a.time))))))), /* @__PURE__ */ React.createElement(
+  }, className: "border border-slate-300 rounded-lg px-2 py-1 text-sm" }, /* @__PURE__ */ React.createElement("option", { value: "30s" }, "Refresh every 30s"), /* @__PURE__ */ React.createElement("option", { value: "5m" }, "Refresh every 5 min"), /* @__PURE__ */ React.createElement("option", { value: "manual" }, "Manual")), /* @__PURE__ */ React.createElement("button", { onClick: refreshNow, className: "px-3 py-1.5 rounded-lg border border-slate-300 text-sm hover:bg-slate-50" }, "Refresh now"))), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-3 gap-4" }, /* @__PURE__ */ React.createElement("div", { className: "lg:col-span-2 space-y-3" }, livePromoters.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "bg-white border border-dashed border-slate-200 rounded-xl p-6 text-sm text-slate-500 italic text-center" }, "No active shifts right now. Promoters appear here when their shift is started.") : livePromoters.map((p) => /* @__PURE__ */ React.createElement("div", { key: p.id, className: `bg-white border-l-4 ${p.status === "ahead" ? "border-emerald-500" : p.status === "behind" ? "border-rose-500" : "border-amber-500"} border-t border-r border-b border-slate-200 rounded-xl p-4` }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between flex-wrap gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "relative" }, /* @__PURE__ */ React.createElement("div", { className: "w-10 h-10 rounded-full bg-slate-900 text-white text-sm font-semibold flex items-center justify-center" }, p.initials), /* @__PURE__ */ React.createElement("span", { className: "absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 border-2 border-white" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold" }, p.name), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, p.cluster, p.booth ? ` \xB7 ${p.booth}` : ""))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-4 text-sm" }, p.sales !== void 0 && /* @__PURE__ */ React.createElement("div", { className: "text-right" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "Sales"), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, p.sales, p.expected ? /* @__PURE__ */ React.createElement("span", { className: "text-xs text-slate-500" }, " / exp. ", p.expected) : null)), p.approaches !== void 0 && /* @__PURE__ */ React.createElement("div", { className: "text-right" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "Approaches"), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, p.approaches)), p.interest !== void 0 && /* @__PURE__ */ React.createElement("div", { className: "text-right" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "Interest"), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, p.interest)), p.duration && /* @__PURE__ */ React.createElement("div", { className: "text-right" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "On shift"), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, p.duration)), /* @__PURE__ */ React.createElement(Pill, { tone: statusTone[p.status] || "slate" }, statusLabel[p.status] || "Live")))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Activity feed", action: /* @__PURE__ */ React.createElement(Pill, { tone: "green" }, "Live") }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-3 max-h-96 overflow-auto" }, ACTIVITY_FEED.map((a, i) => /* @__PURE__ */ React.createElement("li", { key: i, className: "flex items-start gap-2" }, /* @__PURE__ */ React.createElement("div", { className: `mt-1 w-2 h-2 rounded-full ${a.tone === "green" ? "bg-emerald-500" : a.tone === "amber" ? "bg-amber-500" : a.tone === "rose" ? "bg-rose-500" : a.tone === "blue" ? "bg-blue-500" : "bg-slate-400"}` }), /* @__PURE__ */ React.createElement("div", { className: "text-sm flex-1" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, a.who), " ", a.what), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, a.detail), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-400 mt-0.5" }, a.time))))))), /* @__PURE__ */ React.createElement(
     SectionCard,
     {
       title: `Sales vs flight banks \xB7 ${departures.label} (today)`,
@@ -2625,7 +3024,7 @@ function ManagerLive({ airport, promoLabel }) {
     /* @__PURE__ */ React.createElement("div", { className: "mt-3 text-xs text-slate-600" }, departures.code === "BER" ? "Berlin BER skews early/late EU short-haul. Watch the 06:00 and 15:30 banks \u2014 those are the highest-load windows for the Chanel boutique footfall." : "Sales peaks align with the 12:30 GCC/Africa wave and the 18:00 Americas/Asia bank. Mid-afternoon dip (14:00\u201315:00) is structural \u2014 consider shifting break windows there rather than chasing the gap.")
   ));
 }
-function ManagerPromoters() {
+function ManagerPromoters({ metrics, hero }) {
   const ratingTone = { A: "green", B: "blue", C: "amber", D: "rose" };
   const [search, setSearch] = useState("");
   const [region, setRegion] = useState("all");
@@ -2633,12 +3032,26 @@ function ManagerPromoters() {
   const [viewing, setViewing] = useState(null);
   const [messaging, setMessaging] = useState(null);
   const [messageText, setMessageText] = useState("");
-  const regions = useMemo(() => ["all", ...Array.from(new Set(PROMOTER_RATINGS.map((p) => p.region)))], []);
-  const filtered = useMemo(() => PROMOTER_RATINGS.filter((p) => {
+  const isLive = DATA_SOURCE === "supabase" && metrics && (metrics.sales || metrics.shifts);
+  const liveRows = isLive ? aggregatePromoterPerformance(metrics.sales, metrics.shifts, metrics.notes, PRODUCT_CATALOG).map((p, i) => ({
+    id: p.id,
+    name: p.name,
+    region: hero && hero.airport ? hero.airport : "\u2014",
+    rating: "\u2014",
+    rank: i + 1,
+    salesTotal: p.units,
+    convRate: p.contacts > 0 ? Number((p.units / p.contacts * 100).toFixed(1)) : 0,
+    revenue: p.revenue,
+    trend: 0,
+    status: "\u2014"
+  })) : null;
+  const allRows = liveRows || PROMOTER_RATINGS;
+  const regions = useMemo(() => ["all", ...Array.from(new Set(allRows.map((p) => p.region)))], [allRows]);
+  const filtered = useMemo(() => allRows.filter((p) => {
     const matchesSearch = !search || p.name.toLowerCase().includes(search.toLowerCase());
     const matchesRegion = region === "all" || p.region === region;
     return matchesSearch && matchesRegion;
-  }), [search, region]);
+  }), [search, region, allRows]);
   const sendMessage = () => {
     if (!messageText.trim()) {
       addToast("Message is empty", "rose");
@@ -2649,7 +3062,7 @@ function ManagerPromoters() {
     setMessaging(null);
     setMessageText("");
   };
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between flex-wrap gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, { tone: "slate" }, filtered.length, " of ", PROMOTER_RATINGS.length), /* @__PURE__ */ React.createElement(Pill, { tone: "rose" }, PROMOTER_RATINGS.filter((p) => p.status === "below").length, " below avg"), /* @__PURE__ */ React.createElement(Pill, { tone: "green" }, PROMOTER_RATINGS.filter((p) => p.status === "above").length, " above avg")), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 text-sm" }, /* @__PURE__ */ React.createElement("div", { className: "relative" }, /* @__PURE__ */ React.createElement(Search, { className: "w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" }), /* @__PURE__ */ React.createElement("input", { value: search, onChange: (e) => setSearch(e.target.value), placeholder: "Search promoter...", className: "border border-slate-300 rounded-lg pl-7 pr-3 py-1.5 text-sm" })), /* @__PURE__ */ React.createElement("div", { className: "relative" }, /* @__PURE__ */ React.createElement("button", { onClick: () => setRegionOpen(!regionOpen), className: "px-3 py-1.5 rounded-lg border border-slate-300 inline-flex items-center gap-1.5" }, region === "all" ? "All regions" : region, /* @__PURE__ */ React.createElement(ChevronDown, { className: `w-3.5 h-3.5 text-slate-400 transition-transform ${regionOpen ? "rotate-180" : ""}` })), regionOpen && /* @__PURE__ */ React.createElement("div", { className: "absolute right-0 top-9 w-48 bg-white border border-slate-200 rounded-lg shadow-lg z-30" }, regions.map((r) => /* @__PURE__ */ React.createElement("button", { key: r, onClick: () => {
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between flex-wrap gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, { tone: "slate" }, filtered.length, " of ", allRows.length), /* @__PURE__ */ React.createElement(Pill, { tone: "rose" }, allRows.filter((p) => p.status === "below").length, " below avg"), /* @__PURE__ */ React.createElement(Pill, { tone: "green" }, allRows.filter((p) => p.status === "above").length, " above avg")), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 text-sm" }, /* @__PURE__ */ React.createElement("div", { className: "relative" }, /* @__PURE__ */ React.createElement(Search, { className: "w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" }), /* @__PURE__ */ React.createElement("input", { value: search, onChange: (e) => setSearch(e.target.value), placeholder: "Search promoter...", className: "border border-slate-300 rounded-lg pl-7 pr-3 py-1.5 text-sm" })), /* @__PURE__ */ React.createElement("div", { className: "relative" }, /* @__PURE__ */ React.createElement("button", { onClick: () => setRegionOpen(!regionOpen), className: "px-3 py-1.5 rounded-lg border border-slate-300 inline-flex items-center gap-1.5" }, region === "all" ? "All regions" : region, /* @__PURE__ */ React.createElement(ChevronDown, { className: `w-3.5 h-3.5 text-slate-400 transition-transform ${regionOpen ? "rotate-180" : ""}` })), regionOpen && /* @__PURE__ */ React.createElement("div", { className: "absolute right-0 top-9 w-48 bg-white border border-slate-200 rounded-lg shadow-lg z-30" }, regions.map((r) => /* @__PURE__ */ React.createElement("button", { key: r, onClick: () => {
     setRegion(r);
     setRegionOpen(false);
   }, className: `w-full text-left px-3 py-2 text-sm hover:bg-slate-50 ${region === r ? "bg-blue-50 font-medium" : ""}` }, r === "all" ? "All regions" : r)))))), filtered.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "bg-white border border-dashed border-slate-300 rounded-xl p-10 text-center text-sm text-slate-500" }, "No promoters match the current filters. ", /* @__PURE__ */ React.createElement("button", { onClick: () => {
@@ -2671,7 +3084,7 @@ function ManagerPromoters() {
         setMessageText("");
       }, className: "px-3 py-1.5 text-sm border border-slate-300 rounded-lg" }, "Message"), /* @__PURE__ */ React.createElement("button", { onClick: () => setViewing(null), className: "px-3 py-1.5 text-sm bg-slate-900 text-white rounded-lg" }, "Close"))
     },
-    viewing && /* @__PURE__ */ React.createElement("div", { className: "space-y-4 text-sm" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "w-12 h-12 rounded-full bg-slate-900 text-white text-base font-semibold flex items-center justify-center" }, viewing.name.split(" ").map((n) => n[0]).join("")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, viewing.name), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, viewing.region, " \xB7 rating ", viewing.rating, " \xB7 rank #", viewing.rank))), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-4 gap-2" }, /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-lg p-3" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "Sales"), /* @__PURE__ */ React.createElement("div", { className: "font-semibold text-base" }, viewing.salesTotal)), /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-lg p-3" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "Conversion"), /* @__PURE__ */ React.createElement("div", { className: "font-semibold text-base" }, viewing.convRate, "%")), /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-lg p-3" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "Revenue"), /* @__PURE__ */ React.createElement("div", { className: "font-semibold text-base" }, fmtEUR(viewing.revenue))), /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-lg p-3" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "vs prior wk"), /* @__PURE__ */ React.createElement("div", { className: `font-semibold text-base ${viewing.trend > 0 ? "text-emerald-600" : viewing.trend < 0 ? "text-rose-600" : ""}` }, viewing.trend > 0 ? "+" : "", viewing.trend, "%"))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs font-medium text-slate-500 uppercase tracking-wide mb-2" }, "Recent shifts"), /* @__PURE__ */ React.createElement("ul", { className: "space-y-1.5 text-sm" }, /* @__PURE__ */ React.createElement("li", { className: "flex items-center justify-between border-b border-slate-100 pb-1.5" }, /* @__PURE__ */ React.createElement("span", null, "13 May \xB7 Frankfurt T2 \xB7 Early"), /* @__PURE__ */ React.createElement("span", { className: "text-slate-500" }, "12 units \xB7 \u20AC1,440")), /* @__PURE__ */ React.createElement("li", { className: "flex items-center justify-between border-b border-slate-100 pb-1.5" }, /* @__PURE__ */ React.createElement("span", null, "12 May \xB7 Frankfurt T2 \xB7 Late"), /* @__PURE__ */ React.createElement("span", { className: "text-slate-500" }, "9 units \xB7 \u20AC1,170")), /* @__PURE__ */ React.createElement("li", { className: "flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "11 May \xB7 Frankfurt T2 \xB7 Early"), /* @__PURE__ */ React.createElement("span", { className: "text-slate-500" }, "14 units \xB7 \u20AC1,820")))))
+    viewing && /* @__PURE__ */ React.createElement("div", { className: "space-y-4 text-sm" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "w-12 h-12 rounded-full bg-slate-900 text-white text-base font-semibold flex items-center justify-center" }, viewing.name.split(" ").map((n) => n[0]).join("")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, viewing.name), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, viewing.region, " \xB7 rating ", viewing.rating, " \xB7 rank #", viewing.rank))), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-4 gap-2" }, /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-lg p-3" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "Sales"), /* @__PURE__ */ React.createElement("div", { className: "font-semibold text-base" }, viewing.salesTotal)), /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-lg p-3" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "Conversion"), /* @__PURE__ */ React.createElement("div", { className: "font-semibold text-base" }, viewing.convRate, "%")), /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-lg p-3" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "Revenue"), /* @__PURE__ */ React.createElement("div", { className: "font-semibold text-base" }, fmtEUR(viewing.revenue))), /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-lg p-3" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, "vs prior wk"), /* @__PURE__ */ React.createElement("div", { className: `font-semibold text-base ${viewing.trend > 0 ? "text-emerald-600" : viewing.trend < 0 ? "text-rose-600" : ""}` }, viewing.trend > 0 ? "+" : "", viewing.trend, "%"))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs font-medium text-slate-500 uppercase tracking-wide mb-2" }, "Recent shifts"), /* @__PURE__ */ React.createElement("ul", { className: "space-y-1.5 text-sm" }, /* @__PURE__ */ React.createElement("li", { className: "flex items-center justify-between border-b border-slate-100 pb-1.5" }, /* @__PURE__ */ React.createElement("span", null, "13 Jun \xB7 BER T1 \xB7 Early"), /* @__PURE__ */ React.createElement("span", { className: "text-slate-500" }, "12 units \xB7 \u20AC1,788")), /* @__PURE__ */ React.createElement("li", { className: "flex items-center justify-between border-b border-slate-100 pb-1.5" }, /* @__PURE__ */ React.createElement("span", null, "12 Jun \xB7 BER T1 \xB7 Late"), /* @__PURE__ */ React.createElement("span", { className: "text-slate-500" }, "9 units \xB7 \u20AC1,341")), /* @__PURE__ */ React.createElement("li", { className: "flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "11 Jun \xB7 BER T1 \xB7 Early"), /* @__PURE__ */ React.createElement("span", { className: "text-slate-500" }, "14 units \xB7 \u20AC2,086")))))
   ), /* @__PURE__ */ React.createElement(
     Modal,
     {
@@ -2682,15 +3095,16 @@ function ManagerPromoters() {
     },
     messaging && /* @__PURE__ */ React.createElement(MessageThread, { promoterId: messaging.id }),
     /* @__PURE__ */ React.createElement("textarea", { value: messageText, onChange: (e) => setMessageText(e.target.value), rows: 3, placeholder: "Type a quick note for the promoter\u2026", className: "mt-3 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" }),
-    /* @__PURE__ */ React.createElement("div", { className: "mt-2 flex items-center gap-2 flex-wrap" }, ["Great pace this morning \u2014 keep going!", "Try emphasising the 100ml format.", "Check stock on Bloom EDP 100ml tester."].map((t) => /* @__PURE__ */ React.createElement("button", { key: t, onClick: () => setMessageText(t), className: "text-xs px-2 py-1 rounded-full border border-slate-200 hover:bg-slate-50" }, t)))
+    /* @__PURE__ */ React.createElement("div", { className: "mt-2 flex items-center gap-2 flex-wrap" }, ["Great pace this morning \u2014 keep going!", "Try cross-selling Coco Mademoiselle with No.5.", "Check stock on Chanel No.5 EDP 100ml tester."].map((t) => /* @__PURE__ */ React.createElement("button", { key: t, onClick: () => setMessageText(t), className: "text-xs px-2 py-1 rounded-full border border-slate-200 hover:bg-slate-50" }, t)))
   ), /* @__PURE__ */ React.createElement(SectionCard, { title: "Performance gaps", action: /* @__PURE__ */ React.createElement(Pill, { tone: "rose" }, GAPS.filter((g) => g.severity === "critical").length, " critical") }, /* @__PURE__ */ React.createElement("table", { className: "w-full text-sm" }, /* @__PURE__ */ React.createElement("thead", { className: "text-left text-xs text-slate-500 uppercase tracking-wide border-b border-slate-100" }, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { className: "py-2" }, "Promoter"), /* @__PURE__ */ React.createElement("th", null, "Region"), /* @__PURE__ */ React.createElement("th", null, "Gap"), /* @__PURE__ */ React.createElement("th", null, "Current"), /* @__PURE__ */ React.createElement("th", null, "Target"), /* @__PURE__ */ React.createElement("th", null, "Severity"), /* @__PURE__ */ React.createElement("th", null, "Suggested coaching"))), /* @__PURE__ */ React.createElement("tbody", null, GAPS.map((g, i) => /* @__PURE__ */ React.createElement("tr", { key: i, className: "border-b border-slate-50 last:border-0" }, /* @__PURE__ */ React.createElement("td", { className: "py-2.5 font-medium" }, g.promoter), /* @__PURE__ */ React.createElement("td", null, g.region), /* @__PURE__ */ React.createElement("td", null, g.gapType), /* @__PURE__ */ React.createElement("td", { className: "text-rose-600 font-medium" }, g.current), /* @__PURE__ */ React.createElement("td", null, g.target), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(Pill, { tone: g.severity === "critical" ? "rose" : "amber" }, g.severity)), /* @__PURE__ */ React.createElement("td", { className: "text-slate-700" }, g.suggested))))), /* @__PURE__ */ React.createElement("div", { className: "mt-3 text-xs text-slate-500" }, "Gaps are computed per shift cluster and per role. Coaching suggestions are non-binding \u2014 final call sits with the manager.")));
 }
-function ManagerLocations() {
+function ManagerLocations({ metrics, hero }) {
   const ratingTone = { A: "green", B: "blue", C: "amber" };
   const [typeFilter, setTypeFilter] = useState("all");
   const typeOf = (l) => /DF|duty/i.test(l.booth || "") ? "duty-free" : "retail";
   const filtered = useMemo(() => LOCATIONS.filter((l) => typeFilter === "all" ? true : typeOf(l) === typeFilter), [typeFilter]);
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "grid md:grid-cols-4 gap-4" }, /* @__PURE__ */ React.createElement(StatCard, { label: "Active locations", value: LOCATIONS.filter((l) => l.status === "active").length, sub: `of ${LOCATIONS.length} total`, icon: MapPin, tone: "blue" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Avg revenue / location", value: fmtEUR(LOCATIONS.reduce((a, b) => a + b.revenue, 0) / LOCATIONS.length), sub: "this campaign", icon: Target, tone: "green" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Best performer", value: "Berlin BER T1", sub: `${fmtEUR(31480)} \xB7 A rating`, icon: Award, tone: "purple" }), /* @__PURE__ */ React.createElement(StatCard, { label: "OOS flags open", value: LOCATIONS.filter((l) => l.oosFlag).length, sub: "needs replenishment", icon: AlertTriangle, tone: "rose" })), /* @__PURE__ */ React.createElement(SectionCard, { title: "Performance by airport / terminal", action: /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, [
+  const isLive = DATA_SOURCE === "supabase" && metrics && metrics.shifts;
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, isLive && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2" }, "Multi-location intelligence (", hero ? hero.airport : "\u2014", ") shown as planning view. Per-booth metrics light up automatically as shifts log sales against each location string."), /* @__PURE__ */ React.createElement("div", { className: "grid md:grid-cols-4 gap-4" }, /* @__PURE__ */ React.createElement(StatCard, { label: "Active locations", value: LOCATIONS.filter((l) => l.status === "active").length, sub: `of ${LOCATIONS.length} total`, icon: MapPin, tone: "blue" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Avg revenue / location", value: fmtEUR(LOCATIONS.reduce((a, b) => a + b.revenue, 0) / LOCATIONS.length), sub: "this campaign", icon: Target, tone: "green" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Best performer", value: "Berlin BER T1", sub: `${fmtEUR(31480)} \xB7 A rating`, icon: Award, tone: "purple" }), /* @__PURE__ */ React.createElement(StatCard, { label: "OOS flags open", value: LOCATIONS.filter((l) => l.oosFlag).length, sub: "needs replenishment", icon: AlertTriangle, tone: "rose" })), /* @__PURE__ */ React.createElement(SectionCard, { title: "Performance by airport / terminal", action: /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, [
     { k: "all", label: "All", tone: "slate" },
     { k: "retail", label: "Retail", tone: "blue" },
     { k: "duty-free", label: "Duty-free", tone: "amber" }
@@ -2705,9 +3119,9 @@ function ManagerLocations() {
   ))) }, /* @__PURE__ */ React.createElement("table", { className: "w-full text-sm" }, /* @__PURE__ */ React.createElement("thead", { className: "text-left text-xs text-slate-500 uppercase tracking-wide border-b border-slate-100" }, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { className: "py-2" }, "Location"), /* @__PURE__ */ React.createElement("th", null, "Terminal / booth"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Units"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Revenue"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "vs target"), /* @__PURE__ */ React.createElement("th", { className: "text-right" }, "Contacts"), /* @__PURE__ */ React.createElement("th", null, "Status"), /* @__PURE__ */ React.createElement("th", null, "Rating"), /* @__PURE__ */ React.createElement("th", null, "OOS"))), /* @__PURE__ */ React.createElement("tbody", null, filtered.map((l) => {
     const pct = Math.round(l.revenue / l.target * 100);
     return /* @__PURE__ */ React.createElement("tr", { key: l.id, className: "border-b border-slate-50 last:border-0" }, /* @__PURE__ */ React.createElement("td", { className: "py-2.5" }, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, l.airport), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, l.id)), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("div", null, l.terminal), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, l.booth)), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, l.units), /* @__PURE__ */ React.createElement("td", { className: "text-right font-semibold" }, fmtEUR(l.revenue)), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, pct, "%"), /* @__PURE__ */ React.createElement("div", { className: "w-20 ml-auto" }, /* @__PURE__ */ React.createElement(ProgressBar, { pct, tone: pct >= 100 ? "green" : pct >= 75 ? "blue" : "amber" }))), /* @__PURE__ */ React.createElement("td", { className: "text-right" }, l.contacts), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(Pill, { tone: l.status === "active" ? "green" : "slate" }, l.status)), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement(Pill, { tone: ratingTone[l.rating] }, l.rating)), /* @__PURE__ */ React.createElement("td", null, l.oosFlag ? /* @__PURE__ */ React.createElement(Pill, { tone: "rose" }, "Open") : /* @__PURE__ */ React.createElement(Pill, { tone: "green" }, "Clear")));
-  })))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Booth setup compliance \u2014 last 7 days" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-2 text-sm" }, /* @__PURE__ */ React.createElement("li", { className: "flex justify-between items-center" }, /* @__PURE__ */ React.createElement("span", null, "Frankfurt T2 \u2014 Heinemann DF Z-Gates"), /* @__PURE__ */ React.createElement(Pill, { tone: "green" }, "7 / 7 checklists")), /* @__PURE__ */ React.createElement("li", { className: "flex justify-between items-center" }, /* @__PURE__ */ React.createElement("span", null, "Munich T2 \u2014 Heinemann DF G-Gates"), /* @__PURE__ */ React.createElement(Pill, { tone: "amber" }, "5 / 7 checklists")), /* @__PURE__ */ React.createElement("li", { className: "flex justify-between items-center" }, /* @__PURE__ */ React.createElement("span", null, "Hamburg Pier A \u2014 Heinemann DF non-Schengen"), /* @__PURE__ */ React.createElement(Pill, { tone: "green" }, "7 / 7 checklists"))), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-3" }, "Checklist = booth photo + stock confirmation completed at shift start.")));
+  })))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Booth setup compliance \u2014 last 7 days" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-2 text-sm" }, /* @__PURE__ */ React.createElement("li", { className: "flex justify-between items-center" }, /* @__PURE__ */ React.createElement("span", null, "Berlin BER \xB7 Terminal 1 \u2014 Chanel Boutique"), /* @__PURE__ */ React.createElement(Pill, { tone: "green" }, "7 / 7 checklists")), /* @__PURE__ */ React.createElement("li", { className: "flex justify-between items-center" }, /* @__PURE__ */ React.createElement("span", null, "BER T1 South \u2014 Heinemann DF B-Gates"), /* @__PURE__ */ React.createElement(Pill, { tone: "amber" }, "5 / 7 checklists"))), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-3" }, "Checklist = booth photo + stock confirmation completed at shift start.")));
 }
-function ManagerReports() {
+function ManagerReports({ metrics, hero }) {
   const [generating, setGenerating] = useState(null);
   const [customizing, setCustomizing] = useState(null);
   const [schedules, setSchedules] = useState([
@@ -2818,9 +3232,50 @@ function ManagerReports() {
   ));
 }
 function ClientReport({ onExit }) {
-  const visibleQuotes = QUOTES.filter((q) => q.clientVisible);
+  const promoId = useActivePromotionId();
+  const { data: projects } = useProjects();
+  const { shifts: liveShifts, sales: liveSales, notes: liveNotes } = useDashboardMetrics(DATA_SOURCE === "supabase" ? promoId : null);
+  const activeProject = (projects || []).find((p) => p.id === promoId);
+  const raw = activeProject && activeProject.raw;
+  const isLive = DATA_SOURCE === "supabase" && raw;
+  const formatPromoDate = (d) => {
+    if (!d) return null;
+    try {
+      const dt = new Date(d);
+      if (isNaN(dt.getTime())) return d;
+      return dt.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+    } catch {
+      return d;
+    }
+  };
+  const splitLocation = (loc) => {
+    if (!loc) return { airport: null, location: null };
+    const parts = String(loc).split("\xB7").map((s) => s.trim()).filter(Boolean);
+    if (parts.length <= 1) return { airport: parts[0] || null, location: parts[0] || null };
+    return { airport: parts[0], location: parts.slice(1).join(" \xB7 ") };
+  };
+  const heroLoc = splitLocation(raw && raw.location);
+  const heroBrand = isLive ? raw.brand || PROMOTION.brand : PROMOTION.brand;
+  const heroCampaign = isLive ? raw.note || PROMOTION.campaign : PROMOTION.campaign;
+  const heroClient = isLive ? raw.client || PROMOTION.client : PROMOTION.client;
+  const heroAirport = isLive ? heroLoc.airport || PROMOTION.airport : PROMOTION.airport;
+  const heroLocLabel = isLive ? heroLoc.location || PROMOTION.location : PROMOTION.location;
+  const heroStart = isLive && raw.start_date ? formatPromoDate(raw.start_date) : PROMOTION.startDate;
+  const heroEnd = isLive && raw.end_date ? formatPromoDate(raw.end_date) : PROMOTION.endDate;
+  const heroTarget = isLive && raw.target_revenue ? Number(raw.target_revenue) : PROMOTION.targetRevenue;
+  const liveTotals = isLive && (liveSales || liveShifts || liveNotes) ? aggregateTotals(liveSales, liveShifts, liveNotes, PRODUCT_CATALOG, heroTarget) : null;
+  const liveProducts = isLive && liveSales ? aggregateProductPerformance(liveSales, PRODUCT_CATALOG) : null;
+  const liveClientQuotes = isLive && liveNotes ? aggregateQuotes(liveNotes) : null;
+  const reportRevenue = liveTotals ? liveTotals.revenue : totalRevenue;
+  const reportUnits = liveTotals ? liveTotals.units : totalUnits;
+  const reportContacts = liveTotals ? liveTotals.contacts : totalContacts;
+  const reportTarget = heroTarget || PROMOTION.targetRevenue;
+  const reportTargetPct = reportTarget ? Math.min(100, Math.round(reportRevenue / reportTarget * 100)) : targetPct;
+  const reportConversion = reportContacts > 0 ? Math.round(reportUnits / reportContacts * 100) : conversionRate;
+  const visibleQuotes = liveClientQuotes && liveClientQuotes.length > 0 ? liveClientQuotes.map((q) => ({ quote: q.text, who: q.promoter ? `Recorded by ${q.promoter}` : "Recorded by promoter" })) : QUOTES.filter((q) => q.clientVisible);
   const visibleCustomQs = CUSTOM_QUESTIONS.filter((q) => q.clientVisible);
-  const topProducts = [...PRODUCT_PERFORMANCE].sort((a, b) => b.revenue - a.revenue).slice(0, 3);
+  const topProducts = liveProducts && liveProducts.length > 0 ? liveProducts.slice(0, 3) : [...PRODUCT_PERFORMANCE].sort((a, b) => b.revenue - a.revenue).slice(0, 3);
+  const reportSkuCount = liveProducts ? liveProducts.length : PRODUCT_PERFORMANCE.length;
   return /* @__PURE__ */ React.createElement("div", { className: "min-h-screen bg-gradient-to-b from-slate-50 to-white" }, /* @__PURE__ */ React.createElement("div", { className: "bg-white border-b border-slate-200" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-5xl mx-auto px-6 py-3 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("button", { onClick: onExit, className: "text-slate-500 hover:text-slate-900 flex items-center text-sm" }, /* @__PURE__ */ React.createElement(ChevronLeft, { className: "w-4 h-4 mr-1" }), " Back to role picker"), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 text-xs" }, /* @__PURE__ */ React.createElement("span", { className: "text-slate-500" }, "Client view \xB7 read-only"), /* @__PURE__ */ React.createElement(
     "button",
     {
@@ -2836,14 +3291,14 @@ function ClientReport({ onExit }) {
     },
     /* @__PURE__ */ React.createElement(Download, { className: "w-3.5 h-3.5" }),
     " Download PDF"
-  )))), /* @__PURE__ */ React.createElement("header", { className: "max-w-5xl mx-auto px-6 pt-10 pb-8" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase tracking-wider font-semibold" }, "Promotion report"), /* @__PURE__ */ React.createElement("h1", { className: "mt-2 text-4xl font-bold tracking-tight" }, PROMOTION.brand, " \u2014 ", PROMOTION.campaign), /* @__PURE__ */ React.createElement("div", { className: "mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600" }, /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Building2, { className: "w-4 h-4" }), " ", PROMOTION.client), /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4" }), " ", PROMOTION.airport), /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(MapPin, { className: "w-4 h-4" }), " ", PROMOTION.location), /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Calendar, { className: "w-4 h-4" }), " ", PROMOTION.startDate, " \u2013 ", PROMOTION.endDate)), /* @__PURE__ */ React.createElement("div", { className: "mt-6 bg-white border border-slate-200 rounded-2xl p-6" }, /* @__PURE__ */ React.createElement("div", { className: "grid sm:grid-cols-4 gap-6" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase tracking-wide" }, "Revenue"), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-3xl font-bold" }, fmtEUR(totalRevenue)), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-xs text-slate-600" }, "vs target ", fmtEUR(PROMOTION.targetRevenue)), /* @__PURE__ */ React.createElement("div", { className: "mt-2" }, /* @__PURE__ */ React.createElement(ProgressBar, { pct: targetPct, tone: targetPct >= 100 ? "green" : "blue" })), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-xs font-semibold text-slate-800" }, targetPct, "% of target")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase tracking-wide" }, "Units sold"), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-3xl font-bold" }, totalUnits), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-xs text-slate-600" }, "across ", PRODUCT_PERFORMANCE.length, " SKUs")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase tracking-wide" }, "Customer contacts"), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-3xl font-bold" }, totalContacts.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-xs text-slate-600" }, "engaged at the booth")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase tracking-wide" }, "Conversion"), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-3xl font-bold" }, conversionRate, "%"), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-xs text-slate-600" }, "units / contacts"))))), /* @__PURE__ */ React.createElement("main", { className: "max-w-5xl mx-auto px-6 pb-12 space-y-6" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Daily revenue trajectory" }, /* @__PURE__ */ React.createElement("div", { className: "h-64" }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(AreaChart, { data: DAILY_REVENUE }, /* @__PURE__ */ React.createElement("defs", null, /* @__PURE__ */ React.createElement("linearGradient", { id: "rev2", x1: "0", y1: "0", x2: "0", y2: "1" }, /* @__PURE__ */ React.createElement("stop", { offset: "0%", stopColor: "#0891b2", stopOpacity: 0.35 }), /* @__PURE__ */ React.createElement("stop", { offset: "100%", stopColor: "#0891b2", stopOpacity: 0 }))), /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9" }), /* @__PURE__ */ React.createElement(XAxis, { dataKey: "day", tick: { fontSize: 11 }, stroke: "#94a3b8" }), /* @__PURE__ */ React.createElement(YAxis, { tick: { fontSize: 11 }, stroke: "#94a3b8", tickFormatter: (v) => "\u20AC" + v }), /* @__PURE__ */ React.createElement(Tooltip, { formatter: (v) => fmtEUR(v), contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Area, { type: "monotone", dataKey: "revenue", stroke: "#0891b2", strokeWidth: 2, fill: "url(#rev2)" }))))), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Top performing products" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-3" }, topProducts.map((p, i) => /* @__PURE__ */ React.createElement("li", { key: p.name, className: "flex items-center gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "w-7 h-7 rounded-full bg-slate-900 text-white text-xs flex items-center justify-center font-bold" }, i + 1), /* @__PURE__ */ React.createElement("div", { className: "flex-1 min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, p.name), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, p.units, " units sold")), /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold" }, fmtEUR(p.revenue)))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Customer demographics" }, /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mb-2" }, "Gender"), /* @__PURE__ */ React.createElement("div", { className: "h-40" }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(PieChart, null, /* @__PURE__ */ React.createElement(Pie, { data: DEMOGRAPHICS_GENDER, dataKey: "value", nameKey: "name", cx: "50%", cy: "50%", innerRadius: 30, outerRadius: 55 }, DEMOGRAPHICS_GENDER.map((_, i) => /* @__PURE__ */ React.createElement(Cell, { key: i, fill: CHART_COLORS[i] }))), /* @__PURE__ */ React.createElement(Tooltip, { formatter: (v) => `${v}%`, contentStyle: { borderRadius: 8, fontSize: 12 } })))), /* @__PURE__ */ React.createElement("div", { className: "space-y-1 text-xs" }, DEMOGRAPHICS_GENDER.map((d, i) => /* @__PURE__ */ React.createElement("div", { key: d.name, className: "flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement("span", { className: "w-2 h-2 rounded-full", style: { background: CHART_COLORS[i] } }), d.name), /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, d.value, "%"))))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mb-2" }, "Age"), /* @__PURE__ */ React.createElement("div", { className: "space-y-2" }, DEMOGRAPHICS_AGE.map((a) => /* @__PURE__ */ React.createElement("div", { key: a.name }, /* @__PURE__ */ React.createElement("div", { className: "flex justify-between text-xs mb-0.5" }, /* @__PURE__ */ React.createElement("span", null, a.name), /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, a.value, "%")), /* @__PURE__ */ React.createElement(ProgressBar, { pct: a.value * 3, tone: "blue" })))))))), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-1 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Sales vs. departure waves", subtitle: "When the booth converts best, by airport flight bank" }, /* @__PURE__ */ React.createElement("div", { className: "h-56" }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(BarChart, { data: HOURLY_SALES_TODAY }, /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9" }), /* @__PURE__ */ React.createElement(XAxis, { dataKey: "hour", tick: { fontSize: 11 }, stroke: "#94a3b8" }), /* @__PURE__ */ React.createElement(YAxis, { tick: { fontSize: 11 }, stroke: "#94a3b8" }), /* @__PURE__ */ React.createElement(Tooltip, { contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Bar, { dataKey: "sales", fill: "#0891b2", radius: [4, 4, 0, 0] })))), /* @__PURE__ */ React.createElement("ul", { className: "mt-3 space-y-1.5 text-xs text-slate-700" }, /* @__PURE__ */ React.createElement("li", { className: "flex items-start gap-2" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-3.5 h-3.5 mt-0.5 text-cyan-600 flex-shrink-0" }), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold" }, "12:00\u201313:00"), " peak aligns with the ", /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, "Long-haul GCC + Africa"), " bank (91% terminal load).")), /* @__PURE__ */ React.createElement("li", { className: "flex items-start gap-2" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-3.5 h-3.5 mt-0.5 text-cyan-600 flex-shrink-0" }), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold" }, "17:00\u201319:00"), " peak corresponds to the ", /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, "Americas + Asia returns"), " bank \u2014 strongest revenue window of the day.")), /* @__PURE__ */ React.createElement("li", { className: "flex items-start gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-3.5 h-3.5 mt-0.5 text-amber-500 flex-shrink-0" }), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold" }, "14:00\u201316:00"), " lull suggests staffing could be lighter and replenishment scheduled here."))))), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Why customers did not buy" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-2.5" }, NON_PURCHASE_REASONS.slice(0, 5).map((r) => {
+  )))), /* @__PURE__ */ React.createElement("header", { className: "max-w-5xl mx-auto px-6 pt-10 pb-8" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase tracking-wider font-semibold" }, "Promotion report"), /* @__PURE__ */ React.createElement("h1", { className: "mt-2 text-4xl font-bold tracking-tight" }, heroBrand, " \u2014 ", heroCampaign), /* @__PURE__ */ React.createElement("div", { className: "mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600" }, /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Building2, { className: "w-4 h-4" }), " ", heroClient), heroAirport && /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4" }), " ", heroAirport), heroLocLabel && /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(MapPin, { className: "w-4 h-4" }), " ", heroLocLabel), (heroStart || heroEnd) && /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Calendar, { className: "w-4 h-4" }), " ", heroStart || "\u2014", " \u2013 ", heroEnd || "\u2014")), /* @__PURE__ */ React.createElement("div", { className: "mt-6 bg-white border border-slate-200 rounded-2xl p-6" }, /* @__PURE__ */ React.createElement("div", { className: "grid sm:grid-cols-4 gap-6" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase tracking-wide" }, "Revenue"), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-3xl font-bold" }, fmtEUR(reportRevenue)), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-xs text-slate-600" }, "vs target ", fmtEUR(reportTarget)), /* @__PURE__ */ React.createElement("div", { className: "mt-2" }, /* @__PURE__ */ React.createElement(ProgressBar, { pct: reportTargetPct, tone: reportTargetPct >= 100 ? "green" : "blue" })), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-xs font-semibold text-slate-800" }, reportTargetPct, "% of target")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase tracking-wide" }, "Units sold"), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-3xl font-bold" }, reportUnits), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-xs text-slate-600" }, "across ", reportSkuCount, " SKUs")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase tracking-wide" }, "Customer contacts"), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-3xl font-bold" }, reportContacts.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-xs text-slate-600" }, "engaged at the booth")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase tracking-wide" }, "Conversion"), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-3xl font-bold" }, reportConversion, "%"), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-xs text-slate-600" }, "units / contacts"))))), /* @__PURE__ */ React.createElement("main", { className: "max-w-5xl mx-auto px-6 pb-12 space-y-6" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Daily revenue trajectory" }, /* @__PURE__ */ React.createElement("div", { className: "h-64" }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(AreaChart, { data: DAILY_REVENUE }, /* @__PURE__ */ React.createElement("defs", null, /* @__PURE__ */ React.createElement("linearGradient", { id: "rev2", x1: "0", y1: "0", x2: "0", y2: "1" }, /* @__PURE__ */ React.createElement("stop", { offset: "0%", stopColor: "#0891b2", stopOpacity: 0.35 }), /* @__PURE__ */ React.createElement("stop", { offset: "100%", stopColor: "#0891b2", stopOpacity: 0 }))), /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9" }), /* @__PURE__ */ React.createElement(XAxis, { dataKey: "day", tick: { fontSize: 11 }, stroke: "#94a3b8" }), /* @__PURE__ */ React.createElement(YAxis, { tick: { fontSize: 11 }, stroke: "#94a3b8", tickFormatter: (v) => "\u20AC" + v }), /* @__PURE__ */ React.createElement(Tooltip, { formatter: (v) => fmtEUR(v), contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Area, { type: "monotone", dataKey: "revenue", stroke: "#0891b2", strokeWidth: 2, fill: "url(#rev2)" }))))), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Top performing products" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-3" }, topProducts.map((p, i) => /* @__PURE__ */ React.createElement("li", { key: p.name, className: "flex items-center gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "w-7 h-7 rounded-full bg-slate-900 text-white text-xs flex items-center justify-center font-bold" }, i + 1), /* @__PURE__ */ React.createElement("div", { className: "flex-1 min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, p.name), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, p.units, " units sold")), /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold" }, fmtEUR(p.revenue)))))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Customer demographics" }, /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mb-2" }, "Gender"), /* @__PURE__ */ React.createElement("div", { className: "h-40" }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(PieChart, null, /* @__PURE__ */ React.createElement(Pie, { data: DEMOGRAPHICS_GENDER, dataKey: "value", nameKey: "name", cx: "50%", cy: "50%", innerRadius: 30, outerRadius: 55 }, DEMOGRAPHICS_GENDER.map((_, i) => /* @__PURE__ */ React.createElement(Cell, { key: i, fill: CHART_COLORS[i] }))), /* @__PURE__ */ React.createElement(Tooltip, { formatter: (v) => `${v}%`, contentStyle: { borderRadius: 8, fontSize: 12 } })))), /* @__PURE__ */ React.createElement("div", { className: "space-y-1 text-xs" }, DEMOGRAPHICS_GENDER.map((d, i) => /* @__PURE__ */ React.createElement("div", { key: d.name, className: "flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement("span", { className: "w-2 h-2 rounded-full", style: { background: CHART_COLORS[i] } }), d.name), /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, d.value, "%"))))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mb-2" }, "Age"), /* @__PURE__ */ React.createElement("div", { className: "space-y-2" }, DEMOGRAPHICS_AGE.map((a) => /* @__PURE__ */ React.createElement("div", { key: a.name }, /* @__PURE__ */ React.createElement("div", { className: "flex justify-between text-xs mb-0.5" }, /* @__PURE__ */ React.createElement("span", null, a.name), /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, a.value, "%")), /* @__PURE__ */ React.createElement(ProgressBar, { pct: a.value * 3, tone: "blue" })))))))), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-1 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Sales vs. departure waves", subtitle: "When the booth converts best, by airport flight bank" }, /* @__PURE__ */ React.createElement("div", { className: "h-56" }, /* @__PURE__ */ React.createElement(ResponsiveContainer, { width: "100%", height: "100%" }, /* @__PURE__ */ React.createElement(BarChart, { data: HOURLY_SALES_TODAY }, /* @__PURE__ */ React.createElement(CartesianGrid, { strokeDasharray: "3 3", stroke: "#f1f5f9" }), /* @__PURE__ */ React.createElement(XAxis, { dataKey: "hour", tick: { fontSize: 11 }, stroke: "#94a3b8" }), /* @__PURE__ */ React.createElement(YAxis, { tick: { fontSize: 11 }, stroke: "#94a3b8" }), /* @__PURE__ */ React.createElement(Tooltip, { contentStyle: { borderRadius: 8, fontSize: 12 } }), /* @__PURE__ */ React.createElement(Bar, { dataKey: "sales", fill: "#0891b2", radius: [4, 4, 0, 0] })))), /* @__PURE__ */ React.createElement("ul", { className: "mt-3 space-y-1.5 text-xs text-slate-700" }, /* @__PURE__ */ React.createElement("li", { className: "flex items-start gap-2" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-3.5 h-3.5 mt-0.5 text-cyan-600 flex-shrink-0" }), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold" }, "12:00\u201313:00"), " peak aligns with the ", /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, "Long-haul GCC + Africa"), " bank (91% terminal load).")), /* @__PURE__ */ React.createElement("li", { className: "flex items-start gap-2" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-3.5 h-3.5 mt-0.5 text-cyan-600 flex-shrink-0" }), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold" }, "17:00\u201319:00"), " peak corresponds to the ", /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, "Americas + Asia returns"), " bank \u2014 strongest revenue window of the day.")), /* @__PURE__ */ React.createElement("li", { className: "flex items-start gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-3.5 h-3.5 mt-0.5 text-amber-500 flex-shrink-0" }), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { className: "font-semibold" }, "14:00\u201316:00"), " lull suggests staffing could be lighter and replenishment scheduled here."))))), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-2 gap-4" }, /* @__PURE__ */ React.createElement(SectionCard, { title: "Why customers did not buy" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-2.5" }, NON_PURCHASE_REASONS.slice(0, 5).map((r) => {
     const max = Math.max(...NON_PURCHASE_REASONS.map((x) => x.count));
     const pct = r.count / max * 100;
     return /* @__PURE__ */ React.createElement("li", { key: r.reason }, /* @__PURE__ */ React.createElement("div", { className: "flex justify-between text-sm mb-1" }, /* @__PURE__ */ React.createElement("span", { className: "text-slate-800" }, r.reason), /* @__PURE__ */ React.createElement("span", { className: "text-slate-600 font-medium" }, r.count)), /* @__PURE__ */ React.createElement(ProgressBar, { pct, tone: "amber" }));
   }))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Out-of-stock products & lost opportunity" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-2" }, OUT_OF_STOCK.filter((o) => o.lostRevenue > 0).map((o) => /* @__PURE__ */ React.createElement("li", { key: o.product, className: "flex items-center justify-between text-sm border-b border-slate-100 pb-2 last:border-0" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, o.product), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, o.lostUnits, " units estimated lost")), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, fmtEUR(o.lostRevenue))))), /* @__PURE__ */ React.createElement("div", { className: "mt-3 text-xs text-slate-600" }, "Total estimated lost revenue: ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, fmtEUR(totalLostRevenue)), ". Addressing these gaps could materially lift the next campaign."))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Voice of the customer" }, /* @__PURE__ */ React.createElement("div", { className: "grid sm:grid-cols-2 gap-4" }, visibleQuotes.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "bg-slate-50 rounded-xl p-4 border-l-4 border-amber-400" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm italic text-slate-800 leading-relaxed" }, '"', q.quote, '"'), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-2" }, q.who))))), visibleCustomQs.length > 0 && /* @__PURE__ */ React.createElement(SectionCard, { title: "Brand-specific insights" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-4" }, visibleCustomQs.map((q) => /* @__PURE__ */ React.createElement("li", { key: q.id }, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-medium text-slate-900" }, q.question), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-sm text-slate-700" }, String(q.response)))))), /* @__PURE__ */ React.createElement("div", { className: "bg-slate-900 text-white rounded-2xl p-6" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs uppercase tracking-wider text-slate-300 font-semibold" }, "Summary"), /* @__PURE__ */ React.createElement("h3", { className: "mt-2 text-xl font-semibold" }, "A strong start, with clear levers for the next campaign"), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Revenue at ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, targetPct, "%"), " of target with 4 days remaining."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Strongest pull from female travellers aged 35\u201344; floral notes resonate."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), " Sales clearly track the airport's long-haul departure waves \u2014 concentrate full staffing on the ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "12:00\u201313:00"), " and ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "17:00\u201319:00"), " banks."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " 100ml tester unavailability is the largest single loss \u2014 estimated ", fmtEUR(2322), " in missed sales."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " Price sensitivity is the second most common non-purchase reason \u2014 consider a bundle promotion for the next wave.")))), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-5xl mx-auto px-6 py-4 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Prepared by ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-700" }, "UCM"), " \xB7 Promotion Insights"), /* @__PURE__ */ React.createElement("span", null, "Report generated 13 May 2026 \xB7 Demo"))));
 }
 
-// ../../../../tmp/ucm-entry-3u2gd0wicaz.jsx
+// ../../tmp/ucm-entry-t1fg4cwdksj.jsx
 var root = createRoot(document.getElementById("root"));
 root.render(React2.createElement(App));
 

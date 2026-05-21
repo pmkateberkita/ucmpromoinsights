@@ -6,7 +6,7 @@
 <style>body { font-family: Inter, system-ui, sans-serif; background: #f8fafc; } .ucm-loading { display:flex; align-items:center; justify-content:center; height:100vh; color:#64748b; font-size: 14px; }</style>
 <script type="importmap">{ "imports": { "react": "https://esm.sh/react@18.3.1", "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime", "react-dom": "https://esm.sh/react-dom@18.3.1", "react-dom/client": "https://esm.sh/react-dom@18.3.1/client", "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react", "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom", "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.4" } }</script>
 </head><body><div id="root"><div class="ucm-loading">Loading UCM Promotion Insights…</div></div><script type="module">
-// ../../tmp/ucm-entry-uoafrvgth9.jsx
+// ../../tmp/ucm-entry-mnni5jp2lt.jsx
 import React2 from "react";
 import { createRoot } from "react-dom/client";
 
@@ -64,7 +64,8 @@ import {
   HelpCircle,
   Pencil,
   Save,
-  UserPlus
+  UserPlus,
+  Trash2
 } from "lucide-react";
 import {
   BarChart,
@@ -560,6 +561,31 @@ var SupabaseAPI = {
     if (error) throw new Error(error.message);
     return data;
   },
+  // -- CUSTOMER INTERACTIONS (one row per individual contact) -
+  // Each row is a single customer the promoter logged: gender, age group,
+  // whether they purchased, and an optional short note.
+  listShiftInteractions: async (shiftId) => {
+    if (!shiftId) return [];
+    const { data, error } = await supabase.from("customer_interactions").select("*").eq("shift_id", shiftId).order("recorded_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+  addCustomerInteraction: async (shiftId, { gender, ageGroup, purchased, note }) => {
+    const { data, error } = await supabase.from("customer_interactions").insert({
+      shift_id: shiftId,
+      gender: gender || null,
+      age_group: ageGroup || null,
+      purchased: !!purchased,
+      note: note && note.trim() ? note.trim() : null
+    }).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  deleteCustomerInteraction: async (id) => {
+    const { error } = await supabase.from("customer_interactions").delete().eq("id", id);
+    if (error) throw new Error(error.message);
+    return true;
+  },
   // -- PROMOTER ASSIGNMENTS -----------------------------------
   listPromoterAssignments: async (promotionId) => {
     let q = supabase.from("promoter_assignments").select("*, promoters(id, name, email, photo_url, active)");
@@ -886,6 +912,26 @@ function aggregateQuotes(notes) {
     promoter: n.shifts && n.shifts.promoters && n.shifts.promoters.name || "\u2014",
     clientVisible: true
   }));
+}
+function rollupContacts(entries) {
+  const list = entries || [];
+  let female = 0, male = 0, mixed = 0;
+  const ages = {};
+  for (const e of list) {
+    if (e.gender === "female") female += 1;
+    else if (e.gender === "male") male += 1;
+    else if (e.gender === "mixed") mixed += 1;
+    if (e.ageGroup) ages[e.ageGroup] = (ages[e.ageGroup] || 0) + 1;
+  }
+  let ageMain = "";
+  let best = -1;
+  for (const [a, c] of Object.entries(ages)) {
+    if (c > best) {
+      best = c;
+      ageMain = a;
+    }
+  }
+  return { total: list.length, female, male, mixed, ageMain };
 }
 function aggregateDemographics(shifts) {
   const list = shifts || [];
@@ -2541,9 +2587,17 @@ function PromoterApp({ onExit, userEmail }) {
     isLive ? { photo: false, stockConfirmed: false, briefingRead: false, noticedOOS: "" } : { photo: true, stockConfirmed: true, briefingRead: true, noticedOOS: "Chanel No.5 EDP 100ml tester \u2014 only 1 left" }
   );
   const [samples, setSamples] = useState(isLive ? { discoveryMini: 0, bodyLotion: 0 } : { discoveryMini: 14, bodyLotion: 3 });
-  const [contacts, setContacts] = useState(
-    isLive ? { total: 0, female: 0, male: 0, mixed: 0, ageMain: "" } : { total: 42, female: 26, male: 14, mixed: 2, ageMain: "35\u201344" }
-  );
+  const [contacts, setContacts] = useState(() => {
+    if (isLive) return { entries: [], total: 0, female: 0, male: 0, mixed: 0, ageMain: "" };
+    const demoEntries = [
+      { id: "demo-1", gender: "female", ageGroup: "35\u201344", purchased: true, note: "Loved the floral top notes" },
+      { id: "demo-2", gender: "female", ageGroup: "25\u201334", purchased: false, note: "Already owns it" },
+      { id: "demo-3", gender: "male", ageGroup: "45\u201354", purchased: true, note: "Gift for partner" },
+      { id: "demo-4", gender: "mixed", ageGroup: "35\u201344", purchased: false, note: "" },
+      { id: "demo-5", gender: "female", ageGroup: "55+", purchased: true, note: "" }
+    ];
+    return { entries: demoEntries, ...rollupContacts(demoEntries) };
+  });
   const [feedback, setFeedback] = useState(
     isLive ? { note: "", reasons: [], missing: "", lostRev: 0, quote: "" } : {
       note: "Customers responded well to the floral notes. Several asked for the tester unit on the 100ml.",
@@ -2743,7 +2797,8 @@ function TrackerHome({ setScreen, shiftRevenue, shiftUnits, contacts, submitted,
     { id: "checklist", label: "Shift-start checklist", icon: ClipboardCheck, hint: checklistDone ? "Done \xB7 booth photo + stock OK" : "Open before serving first customer", tone: checklistDone ? "green" : "rose" },
     { id: "sales", label: "Product Sales", icon: ShoppingBag, hint: `${shiftUnits} units \xB7 ${fmtEUR(shiftRevenue)}`, tone: "blue" },
     { id: "contacts", label: "Customer Contacts", icon: Users, hint: `${contacts.total} contacts logged`, tone: "purple" },
-    { id: "travel", label: "Samples dispensed", icon: Plane, hint: `${totalSamples} samples logged`, tone: "purple" },
+    // Samples dispensed — hidden for now (all roles). To re-enable, uncomment:
+    // { id: "travel", label: "Samples dispensed", icon: Plane, hint: `${totalSamples} samples logged`, tone: "purple" },
     { id: "feedback", label: "Feedback & Insights", icon: MessageSquare, hint: "Non-purchase reasons \xB7 Lost revenue", tone: "amber" },
     { id: "custom", label: "Client-specific Questions", icon: HelpCircle, hint: qCount > 0 ? `${qCount} question${qCount === 1 ? "" : "s"} configured` : "No questions yet", tone: "rose" }
   ];
@@ -2888,30 +2943,135 @@ function TrackerSales({ setScreen, sales, setSales, shiftId, shiftError, shiftLo
     }
   ));
 }
-function TrackerContacts({ contacts, setContacts }) {
+function TrackerContacts({ contacts, setContacts, shiftId }) {
+  const isLive = DATA_SOURCE === "supabase";
   const ageOptions = ["<25", "25\u201334", "35\u201344", "45\u201354", "55+"];
-  const setField = (k, v) => setContacts({ ...contacts, [k]: v });
-  return /* @__PURE__ */ React.createElement("div", { className: "px-5 py-5 space-y-4" }, /* @__PURE__ */ React.createElement("h3", { className: "font-semibold" }, "Customer Contacts"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-slate-500 -mt-2" }, "Approximate is fine \u2014 capture the rhythm of your shift, not exact counts."), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Total contacts this shift"), /* @__PURE__ */ React.createElement("div", { className: "mt-1.5 flex items-center gap-3" }, /* @__PURE__ */ React.createElement("button", { onClick: () => setField("total", Math.max(0, contacts.total - 5)), className: "w-9 h-9 rounded-full border border-slate-300 flex items-center justify-center" }, /* @__PURE__ */ React.createElement(Minus, { className: "w-4 h-4" })), /* @__PURE__ */ React.createElement("div", { className: "flex-1 text-center text-2xl font-semibold" }, contacts.total), /* @__PURE__ */ React.createElement("button", { onClick: () => setField("total", contacts.total + 5), className: "w-9 h-9 rounded-full border border-slate-300 flex items-center justify-center" }, /* @__PURE__ */ React.createElement(Plus, { className: "w-4 h-4" }))), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 text-center mt-1" }, "+/- 5 at a time")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs font-medium text-slate-700 mb-2" }, "Gender split (rough)"), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-3 gap-2" }, [
+  const genderOptions = [
     { k: "female", label: "Female" },
     { k: "male", label: "Male" },
     { k: "mixed", label: "Mixed" }
-  ].map((g) => /* @__PURE__ */ React.createElement("div", { key: g.k, className: "border border-slate-200 rounded-lg p-2 text-center" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase" }, g.label), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      type: "number",
-      value: contacts[g.k],
-      onChange: (e) => setField(g.k, parseInt(e.target.value) || 0),
-      className: "w-full text-center text-lg font-semibold outline-none"
+  ];
+  const entries = contacts.entries || [];
+  const [draft, setDraft] = useState({ gender: "female", ageGroup: "", purchased: false, note: "" });
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(isLive && !!shiftId);
+  const applyEntries = (updater) => setContacts((prev) => {
+    const next = updater(prev.entries || []);
+    return { ...prev, entries: next, ...rollupContacts(next) };
+  });
+  useEffect(() => {
+    if (!isLive || !shiftId) return;
+    let cancelled = false;
+    setLoading(true);
+    SupabaseAPI.listShiftInteractions(shiftId).then((rows) => {
+      if (cancelled) return;
+      const mapped = (rows || []).map((r) => ({
+        id: r.id,
+        gender: r.gender,
+        ageGroup: r.age_group || "",
+        purchased: !!r.purchased,
+        note: r.note || ""
+      }));
+      setContacts((prev) => ({ ...prev, entries: mapped, ...rollupContacts(mapped) }));
+    }).catch(() => {
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isLive, shiftId]);
+  const addContact = async () => {
+    const tmpId = `tmp-${Date.now()}`;
+    const entry = {
+      id: tmpId,
+      gender: draft.gender,
+      ageGroup: draft.ageGroup || "",
+      purchased: !!draft.purchased,
+      note: (draft.note || "").trim()
+    };
+    applyEntries((es) => [entry, ...es]);
+    setDraft({ gender: "female", ageGroup: "", purchased: false, note: "" });
+    if (isLive && shiftId) {
+      setSaving(true);
+      try {
+        const saved = await SupabaseAPI.addCustomerInteraction(shiftId, {
+          gender: entry.gender,
+          ageGroup: entry.ageGroup,
+          purchased: entry.purchased,
+          note: entry.note
+        });
+        applyEntries((es) => es.map((e) => e.id === tmpId ? { ...e, id: saved.id } : e));
+      } catch (err) {
+        applyEntries((es) => es.filter((e) => e.id !== tmpId));
+        addToast(`Could not save contact: ${err && err.message ? err.message : err}`, "rose");
+      } finally {
+        setSaving(false);
+      }
     }
-  ))))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs font-medium text-slate-700 mb-2" }, "Main age group"), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap gap-2" }, ageOptions.map((a) => /* @__PURE__ */ React.createElement(
+  };
+  const removeContact = (id) => {
+    applyEntries((es) => es.filter((e) => e.id !== id));
+    if (isLive && shiftId && !String(id).startsWith("tmp-")) {
+      SupabaseAPI.deleteCustomerInteraction(id).catch(
+        (err) => addToast(`Could not remove contact: ${err && err.message ? err.message : err}`, "rose")
+      );
+    }
+  };
+  const genderLabel = (k) => (genderOptions.find((g) => g.k === k) || {}).label || k;
+  const purchasedCount = entries.filter((e) => e.purchased).length;
+  return /* @__PURE__ */ React.createElement("div", { className: "px-5 py-5 space-y-4" }, /* @__PURE__ */ React.createElement("h3", { className: "font-semibold" }, "Customer Contacts"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-slate-500 -mt-2" }, "Log each customer you engage with \u2014 gender, age, whether they bought, and a quick note."), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-2" }, /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-lg p-2.5" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase tracking-wide" }, "Contacts"), /* @__PURE__ */ React.createElement("div", { className: "text-lg font-semibold" }, entries.length)), /* @__PURE__ */ React.createElement("div", { className: "bg-slate-50 rounded-lg p-2.5" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 uppercase tracking-wide" }, "Purchased"), /* @__PURE__ */ React.createElement("div", { className: "text-lg font-semibold" }, purchasedCount))), /* @__PURE__ */ React.createElement("div", { className: "border border-slate-200 rounded-xl p-3 space-y-3" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs font-semibold uppercase tracking-wide text-slate-500" }, "Add a contact"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs font-medium text-slate-700 mb-1.5" }, "Gender"), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-3 gap-2" }, genderOptions.map((g) => /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      key: g.k,
+      onClick: () => setDraft((d) => ({ ...d, gender: g.k })),
+      className: `px-2 py-1.5 rounded-lg text-xs font-medium border ${draft.gender === g.k ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-300"}`
+    },
+    g.label
+  )))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs font-medium text-slate-700 mb-1.5" }, "Age group"), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap gap-2" }, ageOptions.map((a) => /* @__PURE__ */ React.createElement(
     "button",
     {
       key: a,
-      onClick: () => setField("ageMain", a),
-      className: `px-3 py-1.5 rounded-full text-xs font-medium border ${contacts.ageMain === a ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-300"}`
+      onClick: () => setDraft((d) => ({ ...d, ageGroup: d.ageGroup === a ? "" : a })),
+      className: `px-3 py-1.5 rounded-full text-xs font-medium border ${draft.ageGroup === a ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-300"}`
     },
     a
-  )))));
+  )))), /* @__PURE__ */ React.createElement("label", { className: "flex items-center gap-2.5 cursor-pointer" }, /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "checkbox",
+      checked: draft.purchased,
+      onChange: (e) => setDraft((d) => ({ ...d, purchased: e.target.checked })),
+      className: "w-4 h-4 rounded border-slate-300"
+    }
+  ), /* @__PURE__ */ React.createElement("span", { className: "text-sm text-slate-700" }, "Made a purchase")), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "text",
+      value: draft.note,
+      onChange: (e) => setDraft((d) => ({ ...d, note: e.target.value })),
+      placeholder: "Quick note (optional) \u2014 e.g. product interest, objection",
+      className: "w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
+    }
+  ), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: addContact,
+      disabled: saving,
+      className: "w-full bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 text-white rounded-lg py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"
+    },
+    /* @__PURE__ */ React.createElement(Plus, { className: "w-4 h-4" }),
+    " ",
+    saving ? "Saving\u2026" : "Add contact"
+  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2" }, "Logged this shift ", loading && /* @__PURE__ */ React.createElement("span", { className: "text-slate-400 normal-case font-normal" }, "\xB7 loading\u2026")), entries.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-500 italic py-4 text-center border border-dashed border-slate-200 rounded-xl" }, "No contacts logged yet. Add your first above.") : /* @__PURE__ */ React.createElement("ul", { className: "space-y-2" }, entries.map((e) => /* @__PURE__ */ React.createElement("li", { key: e.id, className: "border border-slate-200 rounded-lg px-3 py-2 flex items-start gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex-1 min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-medium text-slate-900" }, genderLabel(e.gender), e.ageGroup ? ` \xB7 ${e.ageGroup}` : "", e.purchased && /* @__PURE__ */ React.createElement("span", { className: "ml-2 text-[10px] uppercase tracking-wide text-emerald-600 font-semibold" }, "Bought")), e.note && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-0.5 break-words" }, e.note)), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => removeContact(e.id),
+      className: "text-slate-400 hover:text-rose-600 shrink-0",
+      "aria-label": "Remove contact"
+    },
+    /* @__PURE__ */ React.createElement(Trash2, { className: "w-4 h-4" })
+  ))))));
 }
 function TrackerFeedback({ feedback, setFeedback }) {
   const allReasons = [
@@ -4802,7 +4962,7 @@ function ClientReport({ onExit, clientId = null }) {
   })) : /* @__PURE__ */ React.createElement("div", { className: "py-6 text-center text-sm text-slate-500 italic" }, "No non-purchase feedback recorded yet.")), /* @__PURE__ */ React.createElement(SectionCard, { title: "Out-of-stock products & lost opportunity" }, sectionOOS.filter((o) => o.lostRevenue > 0).length > 0 ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("ul", { className: "space-y-2" }, sectionOOS.filter((o) => o.lostRevenue > 0).map((o) => /* @__PURE__ */ React.createElement("li", { key: o.product, className: "flex items-center justify-between text-sm border-b border-slate-100 pb-2 last:border-0" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, o.product), o.lostUnits != null && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, o.lostUnits, " units estimated lost")), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, fmtEUR(o.lostRevenue))))), /* @__PURE__ */ React.createElement("div", { className: "mt-3 text-xs text-slate-600" }, "Total estimated lost revenue: ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, fmtEUR(reportLostRev)), ". Addressing these gaps could materially lift the next campaign.")) : /* @__PURE__ */ React.createElement("div", { className: "py-6 text-center text-sm text-slate-500 italic" }, "No out-of-stock losses recorded yet."))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Voice of the customer" }, visibleQuotes.length > 0 ? /* @__PURE__ */ React.createElement("div", { className: "grid sm:grid-cols-2 gap-4" }, visibleQuotes.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "bg-slate-50 rounded-xl p-4 border-l-4 border-amber-400" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm italic text-slate-800 leading-relaxed" }, '"', q.quote, '"'), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-2" }, q.who)))) : /* @__PURE__ */ React.createElement("div", { className: "py-6 text-center text-sm text-slate-500 italic" }, "No customer quotes recorded yet.")), visibleCustomQs.length > 0 && /* @__PURE__ */ React.createElement(SectionCard, { title: "Brand-specific insights" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-4" }, visibleCustomQs.map((q) => /* @__PURE__ */ React.createElement("li", { key: q.id }, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-medium text-slate-900" }, q.question), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-sm text-slate-700" }, q.response != null ? String(q.response) : "\u2014"))))), supaLive && visibleCustomQs.length === 0 && liveCustomQuestions && liveCustomQuestions.filter((q) => q.clientVisible).length === 0 && null, !supaLive && /* @__PURE__ */ React.createElement("div", { className: "bg-slate-900 text-white rounded-2xl p-6" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs uppercase tracking-wider text-slate-300 font-semibold" }, "Summary"), /* @__PURE__ */ React.createElement("h3", { className: "mt-2 text-xl font-semibold" }, "A strong start, with clear levers for the next campaign"), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Revenue at ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, targetPct, "%"), " of target with 4 days remaining."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Strongest pull from female travellers aged 35\u201344; floral notes resonate."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), " Sales clearly track the airport's long-haul departure waves \u2014 concentrate full staffing on the ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "12:00\u201313:00"), " and ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "17:00\u201319:00"), " banks."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " 100ml tester unavailability is the largest single loss \u2014 estimated ", fmtEUR(2322), " in missed sales."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " Price sensitivity is the second most common non-purchase reason \u2014 consider a bundle promotion for the next wave."))), supaLive && liveSummary && liveSummary.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "bg-slate-900 text-white rounded-2xl p-6" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs uppercase tracking-wider text-slate-300 font-semibold" }, "Summary"), /* @__PURE__ */ React.createElement("h3", { className: "mt-2 text-xl font-semibold" }, reportTargetPct >= 100 ? "Target met \u2014 clear levers to extend the campaign" : reportTargetPct >= 70 ? "On track \u2014 clear levers for the next campaign" : reportRevenue > 0 ? "Early signal \u2014 clear levers for the next campaign" : "Campaign report"), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, liveSummary.map((b, i) => /* @__PURE__ */ React.createElement("li", { key: i, className: "flex gap-2" }, b.tone === "ok" && /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), b.tone === "plane" && /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), b.tone === "warn" && /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), /* @__PURE__ */ React.createElement("span", null, b.text)))))), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-5xl mx-auto px-6 py-4 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Prepared by ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-700" }, "UCM"), " \xB7 Promotion Insights"), /* @__PURE__ */ React.createElement("span", null, "Report generated ", (/* @__PURE__ */ new Date()).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }), supaLive ? "" : " \xB7 Demo"))));
 }
 
-// ../../tmp/ucm-entry-uoafrvgth9.jsx
+// ../../tmp/ucm-entry-mnni5jp2lt.jsx
 var root = createRoot(document.getElementById("root"));
 root.render(React2.createElement(App));
 

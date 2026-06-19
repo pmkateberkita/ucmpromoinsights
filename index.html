@@ -6,7 +6,7 @@
 <style>body { font-family: Inter, system-ui, sans-serif; background: #f8fafc; } .ucm-loading { display:flex; align-items:center; justify-content:center; height:100vh; color:#64748b; font-size: 14px; }</style>
 <script type="importmap">{ "imports": { "react": "https://esm.sh/react@18.3.1", "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime", "react-dom": "https://esm.sh/react-dom@18.3.1", "react-dom/client": "https://esm.sh/react-dom@18.3.1/client", "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react", "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom", "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.4" } }</script>
 </head><body><div id="root"><div class="ucm-loading">Loading UCM Promotion Insights…</div></div><script type="module">
-// ../../tmp/ucm-entry-0lx4w46fhz0c.jsx
+// ../../tmp/ucm-entry-7kpmj2qp3sp.jsx
 import React2 from "react";
 import { createRoot } from "react-dom/client";
 
@@ -375,13 +375,17 @@ var SupabaseAPI = {
     return data || [];
   },
   createCustomQuestion: async (promotionId, body) => {
-    const { data, error } = await supabase.from("custom_questions").insert({
+    const row = {
       promotion_id: promotionId,
       label: body.label,
       field_type: body.field_type,
       client_visible: body.client_visible ?? true,
       position: body.position ?? 0
-    }).select().single();
+    };
+    if (body.field_type === "multi_choice") {
+      row.choices = Array.isArray(body.choices) ? body.choices : [];
+    }
+    const { data, error } = await supabase.from("custom_questions").insert(row).select().single();
     if (error) throw new Error(error.message);
     return data;
   },
@@ -392,6 +396,11 @@ var SupabaseAPI = {
     if (body.client_visible !== void 0) patch.client_visible = body.client_visible;
     if (body.position !== void 0) patch.position = body.position;
     if (body.active !== void 0) patch.active = body.active;
+    if (body.field_type === "multi_choice") {
+      patch.choices = Array.isArray(body.choices) ? body.choices : [];
+    } else if (body.field_type !== void 0) {
+      patch.choices = null;
+    }
     const { data, error } = await supabase.from("custom_questions").update(patch).eq("id", id).select().single();
     if (error) throw new Error(error.message);
     return data;
@@ -3253,7 +3262,8 @@ function TrackerCustom({ customAnswers, setCustomAnswers, customQuestions }) {
     const shortId = q.id && /^Q\d+$/.test(String(q.id)) ? q.id : `Q${idx + 1}`;
     const isNumeric = q.type === "count" || q.type === "number" || q.type === "rating_1_5";
     const isBoolean = q.type === "boolean";
-    const choices = q.type === "multi_choice" && q.raw && Array.isArray(q.raw.choices) ? q.raw.choices : null;
+    const isChoice = q.type === "multi_choice" || q.type === "choice";
+    const choices = isChoice && q.raw && Array.isArray(q.raw.choices) ? q.raw.choices : null;
     return /* @__PURE__ */ React.createElement("div", { key: q.id }, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700 flex items-start gap-2" }, /* @__PURE__ */ React.createElement(Pill, { tone: "rose" }, shortId), /* @__PURE__ */ React.createElement("span", null, q.question)), isBoolean ? /* @__PURE__ */ React.createElement("div", { className: "mt-1.5 flex gap-2" }, ["yes", "no"].map((opt) => /* @__PURE__ */ React.createElement(
       "button",
       {
@@ -4213,7 +4223,7 @@ function ManagerConfig({ activePromoId, activePromoLabel, activeProject, hero, o
     if (remoteQuestions) setQuestions(remoteQuestions);
   }, [activePromoId, remoteQuestions && remoteQuestions.length]);
   const [editing, setEditing] = useState(null);
-  const [draft, setDraft] = useState({ id: "", question: "", type: "text", clientVisible: false });
+  const [draft, setDraft] = useState({ id: "", question: "", type: "text", clientVisible: false, choices: [] });
   const [addOpen, setAddOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editPromoOpen, setEditPromoOpen] = useState(false);
@@ -4276,18 +4286,33 @@ function ManagerConfig({ activePromoId, activePromoLabel, activeProject, hero, o
   };
   const openAdd = () => {
     const nextId = "Q" + (questions.length + 1);
-    setDraft({ id: nextId, question: "", type: "text", clientVisible: false });
+    setDraft({ id: nextId, question: "", type: "text", clientVisible: false, choices: [] });
     setAddOpen(true);
   };
   const openEdit = (q) => {
     setEditing(q.id);
-    setDraft({ id: q.id, question: q.question, type: q.type, clientVisible: q.clientVisible });
+    const existingChoices = q.raw && Array.isArray(q.raw.choices) ? q.raw.choices : [];
+    setDraft({
+      id: q.id,
+      question: q.question,
+      type: q.type,
+      clientVisible: q.clientVisible,
+      choices: existingChoices
+    });
   };
-  const saveAdd = () => {
+  const validateBeforeSave = () => {
     if (!draft.question.trim()) {
       addToast("Please enter a question", "rose");
-      return;
+      return false;
     }
+    if (draft.type === "multi_choice" && (!Array.isArray(draft.choices) || draft.choices.length === 0)) {
+      addToast("Multiple choice questions need at least one option", "rose");
+      return false;
+    }
+    return true;
+  };
+  const saveAdd = () => {
+    if (!validateBeforeSave()) return;
     setQuestions([...questions, { ...draft, response: "\u2014" }]);
     setAddOpen(false);
     addToast(`Question ${draft.id} added`, "green");
@@ -4296,27 +4321,46 @@ function ManagerConfig({ activePromoId, activePromoLabel, activeProject, hero, o
         label: draft.question,
         field_type: draft.type,
         client_visible: draft.clientVisible,
-        position: questions.length
+        position: questions.length,
+        choices: draft.type === "multi_choice" ? draft.choices || [] : null
       }).catch((err) => addToast(`Save failed: ${err.message || err}`, "rose"));
     } else if (DATA_SOURCE === "falcon" && activePromoId) {
       FalconAPI.createJobDynamicField(activePromoId, {
-        dynamic_field: { label: draft.question, field_type: draft.type, client_visible: draft.clientVisible }
+        dynamic_field: {
+          label: draft.question,
+          field_type: draft.type,
+          client_visible: draft.clientVisible,
+          choices: draft.type === "multi_choice" ? draft.choices || [] : null
+        }
       }).catch((err) => addToast(`Save failed: ${err.message || err}`, "rose"));
     }
   };
   const saveEdit = () => {
-    setQuestions(questions.map((q) => q.id === editing ? { ...q, question: draft.question, type: draft.type, clientVisible: draft.clientVisible } : q));
+    if (!validateBeforeSave()) return;
+    setQuestions(questions.map((q) => q.id === editing ? {
+      ...q,
+      question: draft.question,
+      type: draft.type,
+      clientVisible: draft.clientVisible,
+      raw: { ...q.raw || {}, choices: draft.type === "multi_choice" ? draft.choices : null }
+    } : q));
     setEditing(null);
     addToast("Question updated", "green");
     if (DATA_SOURCE === "supabase" && editing) {
       SupabaseAPI.updateCustomQuestion(editing, {
         label: draft.question,
         field_type: draft.type,
-        client_visible: draft.clientVisible
+        client_visible: draft.clientVisible,
+        choices: draft.type === "multi_choice" ? draft.choices || [] : null
       }).catch((err) => addToast(`Update failed: ${err.message || err}`, "rose"));
     } else if (DATA_SOURCE === "falcon" && editing) {
       FalconAPI.updateDynamicField(editing, {
-        dynamic_field: { label: draft.question, field_type: draft.type, client_visible: draft.clientVisible }
+        dynamic_field: {
+          label: draft.question,
+          field_type: draft.type,
+          client_visible: draft.clientVisible,
+          choices: draft.type === "multi_choice" ? draft.choices || [] : null
+        }
       }).catch((err) => addToast(`Update failed: ${err.message || err}`, "rose"));
     }
   };
@@ -4461,7 +4505,26 @@ function MessageThread({ promoterId }) {
   return /* @__PURE__ */ React.createElement("div", { className: "max-h-48 overflow-auto space-y-2 border border-slate-100 rounded-lg p-2 bg-slate-50" }, [...thread].reverse().map((m) => /* @__PURE__ */ React.createElement("div", { key: m.id, className: "space-y-1" }, /* @__PURE__ */ React.createElement("div", { className: "bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" }, /* @__PURE__ */ React.createElement("div", { className: "text-slate-500 mb-0.5" }, "You \xB7 ", m.time, " ", !m.read && /* @__PURE__ */ React.createElement("span", { className: "text-blue-600 ml-1" }, "\xB7 delivered"), " ", m.read && /* @__PURE__ */ React.createElement("span", { className: "text-emerald-600 ml-1" }, "\xB7 read")), /* @__PURE__ */ React.createElement("div", { className: "text-slate-800" }, m.text)), m.replies.map((r) => /* @__PURE__ */ React.createElement("div", { key: r.id, className: "bg-blue-50 border border-blue-200 rounded-lg px-2.5 py-1.5 text-xs ml-4" }, /* @__PURE__ */ React.createElement("div", { className: "text-slate-500 mb-0.5" }, r.from, " \xB7 ", r.time), /* @__PURE__ */ React.createElement("div", { className: "text-slate-800" }, r.text))))));
 }
 function QuestionForm({ draft, setDraft }) {
-  return /* @__PURE__ */ React.createElement("div", { className: "space-y-3 text-sm" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Question ID"), /* @__PURE__ */ React.createElement("input", { value: draft.id, onChange: (e) => setDraft({ ...draft, id: e.target.value }), className: "mt-1 w-full border border-slate-300 rounded-lg px-3 py-2" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Question text"), /* @__PURE__ */ React.createElement("textarea", { value: draft.question, onChange: (e) => setDraft({ ...draft, question: e.target.value }), rows: 2, placeholder: "e.g. How many customers asked for the 100ml format?", className: "mt-1 w-full border border-slate-300 rounded-lg px-3 py-2" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Answer type"), /* @__PURE__ */ React.createElement("div", { className: "mt-1 flex gap-1.5" }, [["text", "Free text"], ["count", "Numeric count"], ["choice", "Multiple choice"]].map(([v, l]) => /* @__PURE__ */ React.createElement("button", { key: v, onClick: () => setDraft({ ...draft, type: v }), className: `px-3 py-1.5 rounded-lg text-xs font-medium border ${draft.type === v ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-300"}` }, l)))), /* @__PURE__ */ React.createElement("label", { className: "flex items-center gap-2 text-sm cursor-pointer" }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: draft.clientVisible, onChange: (e) => setDraft({ ...draft, clientVisible: e.target.checked }) }), /* @__PURE__ */ React.createElement("span", null, "Show answer in the client-facing report")));
+  const TYPES = [
+    ["text", "Free text"],
+    ["number", "Numeric count"],
+    ["multi_choice", "Multiple choice"]
+  ];
+  const choicesText = Array.isArray(draft.choices) ? draft.choices.join("\n") : "";
+  const onChoicesChange = (s) => {
+    const arr = s.split("\n").map((x) => x.trim()).filter(Boolean);
+    setDraft({ ...draft, choices: arr });
+  };
+  return /* @__PURE__ */ React.createElement("div", { className: "space-y-3 text-sm" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Question ID"), /* @__PURE__ */ React.createElement("input", { value: draft.id, onChange: (e) => setDraft({ ...draft, id: e.target.value }), className: "mt-1 w-full border border-slate-300 rounded-lg px-3 py-2" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Question text"), /* @__PURE__ */ React.createElement("textarea", { value: draft.question, onChange: (e) => setDraft({ ...draft, question: e.target.value }), rows: 2, placeholder: "e.g. How many customers asked for the 100ml format?", className: "mt-1 w-full border border-slate-300 rounded-lg px-3 py-2" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Answer type"), /* @__PURE__ */ React.createElement("div", { className: "mt-1 flex gap-1.5" }, TYPES.map(([v, l]) => /* @__PURE__ */ React.createElement("button", { key: v, onClick: () => setDraft({ ...draft, type: v }), className: `px-3 py-1.5 rounded-lg text-xs font-medium border ${draft.type === v ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-300"}` }, l)))), draft.type === "multi_choice" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Answer options"), /* @__PURE__ */ React.createElement(
+    "textarea",
+    {
+      value: choicesText,
+      onChange: (e) => onChoicesChange(e.target.value),
+      rows: 5,
+      placeholder: "One option per line, e.g.\nSize not available\nJust browsing\nAlready owns it\nPrice too high",
+      className: "mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 font-mono text-xs"
+    }
+  ), /* @__PURE__ */ React.createElement("div", { className: "text-[11px] text-slate-400 mt-1" }, (draft.choices || []).length, " option", (draft.choices || []).length === 1 ? "" : "s", ". Promoters will see these as a dropdown on the daily report.")), /* @__PURE__ */ React.createElement("label", { className: "flex items-center gap-2 text-sm cursor-pointer" }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: draft.clientVisible, onChange: (e) => setDraft({ ...draft, clientVisible: e.target.checked }) }), /* @__PURE__ */ React.createElement("span", null, "Show answer in the client-facing report")));
 }
 function AlertsDropdown({ onClose, alertsRead = [], onMarkRead = () => {
 }, onMarkAll = () => {
@@ -5016,7 +5079,7 @@ function ClientReport({ onExit, clientId = null }) {
   })) : /* @__PURE__ */ React.createElement("div", { className: "py-6 text-center text-sm text-slate-500 italic" }, "No non-purchase feedback recorded yet.")), /* @__PURE__ */ React.createElement(SectionCard, { title: "Out-of-stock products & lost opportunity" }, sectionOOS.filter((o) => o.lostRevenue > 0).length > 0 ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("ul", { className: "space-y-2" }, sectionOOS.filter((o) => o.lostRevenue > 0).map((o) => /* @__PURE__ */ React.createElement("li", { key: o.product, className: "flex items-center justify-between text-sm border-b border-slate-100 pb-2 last:border-0" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, o.product), o.lostUnits != null && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, o.lostUnits, " units estimated lost")), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, fmtEUR(o.lostRevenue))))), /* @__PURE__ */ React.createElement("div", { className: "mt-3 text-xs text-slate-600" }, "Total estimated lost revenue: ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, fmtEUR(reportLostRev)), ". Addressing these gaps could materially lift the next campaign.")) : /* @__PURE__ */ React.createElement("div", { className: "py-6 text-center text-sm text-slate-500 italic" }, "No out-of-stock losses recorded yet."))), /* @__PURE__ */ React.createElement(SectionCard, { title: "Voice of the customer" }, visibleQuotes.length > 0 ? /* @__PURE__ */ React.createElement("div", { className: "grid sm:grid-cols-2 gap-4" }, visibleQuotes.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "bg-slate-50 rounded-xl p-4 border-l-4 border-amber-400" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm italic text-slate-800 leading-relaxed" }, '"', q.quote, '"'), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-2" }, q.who)))) : /* @__PURE__ */ React.createElement("div", { className: "py-6 text-center text-sm text-slate-500 italic" }, "No customer quotes recorded yet.")), visibleCustomQs.length > 0 && /* @__PURE__ */ React.createElement(SectionCard, { title: "Brand-specific insights" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-4" }, visibleCustomQs.map((q) => /* @__PURE__ */ React.createElement("li", { key: q.id }, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-medium text-slate-900" }, q.question), /* @__PURE__ */ React.createElement("div", { className: "mt-1 text-sm text-slate-700" }, q.response != null ? String(q.response) : "\u2014"))))), supaLive && visibleCustomQs.length === 0 && liveCustomQuestions && liveCustomQuestions.filter((q) => q.clientVisible).length === 0 && null, !supaLive && /* @__PURE__ */ React.createElement("div", { className: "bg-slate-900 text-white rounded-2xl p-6" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs uppercase tracking-wider text-slate-300 font-semibold" }, "Summary"), /* @__PURE__ */ React.createElement("h3", { className: "mt-2 text-xl font-semibold" }, "A strong start, with clear levers for the next campaign"), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Revenue at ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, targetPct, "%"), " of target with 4 days remaining."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Strongest pull from female travellers aged 35\u201344; floral notes resonate."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), " Sales clearly track the airport's long-haul departure waves \u2014 concentrate full staffing on the ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "12:00\u201313:00"), " and ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "17:00\u201319:00"), " banks."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " 100ml tester unavailability is the largest single loss \u2014 estimated ", fmtEUR(2322), " in missed sales."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " Price sensitivity is the second most common non-purchase reason \u2014 consider a bundle promotion for the next wave."))), supaLive && liveSummary && liveSummary.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "bg-slate-900 text-white rounded-2xl p-6" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs uppercase tracking-wider text-slate-300 font-semibold" }, "Summary"), /* @__PURE__ */ React.createElement("h3", { className: "mt-2 text-xl font-semibold" }, reportTargetPct >= 100 ? "Target met \u2014 clear levers to extend the campaign" : reportTargetPct >= 70 ? "On track \u2014 clear levers for the next campaign" : reportRevenue > 0 ? "Early signal \u2014 clear levers for the next campaign" : "Campaign report"), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, liveSummary.map((b, i) => /* @__PURE__ */ React.createElement("li", { key: i, className: "flex gap-2" }, b.tone === "ok" && /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), b.tone === "plane" && /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), b.tone === "warn" && /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), /* @__PURE__ */ React.createElement("span", null, b.text)))))), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-5xl mx-auto px-6 py-4 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Prepared by ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-700" }, "UCM"), " \xB7 Promotion Insights"), /* @__PURE__ */ React.createElement("span", null, "Report generated ", (/* @__PURE__ */ new Date()).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }), supaLive ? "" : " \xB7 Demo"))));
 }
 
-// ../../tmp/ucm-entry-0lx4w46fhz0c.jsx
+// ../../tmp/ucm-entry-7kpmj2qp3sp.jsx
 var root = createRoot(document.getElementById("root"));
 root.render(React2.createElement(App));
 

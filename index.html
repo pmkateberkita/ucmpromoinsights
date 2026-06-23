@@ -6,7 +6,7 @@
 <style>body { font-family: Inter, system-ui, sans-serif; background: #f8fafc; } .ucm-loading { display:flex; align-items:center; justify-content:center; height:100vh; color:#64748b; font-size: 14px; }</style>
 <script type="importmap">{ "imports": { "react": "https://esm.sh/react@18.3.1", "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime", "react-dom": "https://esm.sh/react-dom@18.3.1", "react-dom/client": "https://esm.sh/react-dom@18.3.1/client", "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react", "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom", "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.4" } }</script>
 </head><body><div id="root"><div class="ucm-loading">Loading UCM Promotion Insights…</div></div><script type="module">
-// ../../tmp/ucm-entry-m005pl6zsl8.jsx
+// ../../tmp/ucm-entry-0js5822mi9xp.jsx
 import React2 from "react";
 import { createRoot } from "react-dom/client";
 
@@ -1222,6 +1222,19 @@ function resolvePromoterConfig(raw) {
     product_mode: raw.product_mode === "free" ? "free" : "sale",
     show_revenue_kpi: typeof raw.show_revenue_kpi === "boolean" ? raw.show_revenue_kpi : DEFAULT_PROMOTER_CONFIG.show_revenue_kpi
   };
+}
+var FEEDBACK_SECTIONS = [
+  { id: "general_feedback", label: "General customer feedback / quotes", hint: "Free-text + voice note + photo + scan EAN" },
+  { id: "memorable_quote", label: "Most memorable customer quote", hint: "Single-line quote highlight" },
+  { id: "non_purchase_reasons", label: "Non-purchase reason chips", hint: '"Just browsing" / "Too expensive" / etc \u2014 cosmetics-specific' },
+  { id: "missing_products", label: "Missing / out-of-stock products", hint: "Lookup field for OOS SKUs" },
+  { id: "lost_revenue", label: "Estimated lost revenue (\u20AC)", hint: "Manual \u20AC input \u2014 hide for free/service promotions" }
+];
+function isFeedbackSectionEnabled(enabledModules, id) {
+  const fs = enabledModules && typeof enabledModules === "object" && enabledModules.feedback_sections;
+  if (!fs || typeof fs !== "object") return true;
+  if (fs[id] === false) return false;
+  return true;
 }
 var CLIENT_REPORT_SECTIONS = [
   { id: "kpi_revenue", label: "Revenue KPI tile", hint: "Top-row \u20AC-revenue stat" },
@@ -3379,7 +3392,12 @@ function TrackerContacts({ contacts, setContacts, sales, setSales, shiftId, shif
   }))));
 }
 function TrackerFeedback({ feedback, setFeedback, customQuestions = [], customAnswers = {}, setCustomAnswers = () => {
-} }) {
+}, enabledModules = null }) {
+  const showGeneralFeedback = isFeedbackSectionEnabled(enabledModules, "general_feedback");
+  const showMemorableQuote = isFeedbackSectionEnabled(enabledModules, "memorable_quote");
+  const showNonPurchaseReasons = isFeedbackSectionEnabled(enabledModules, "non_purchase_reasons");
+  const showMissingProducts = isFeedbackSectionEnabled(enabledModules, "missing_products");
+  const showLostRevenue = isFeedbackSectionEnabled(enabledModules, "lost_revenue");
   const shiftQs = (customQuestions || []).filter((q) => (q.section || "contact") === "shift");
   const allReasons = [
     "Already owns the fragrance",
@@ -3478,7 +3496,7 @@ function TrackerFeedback({ feedback, setFeedback, customQuestions = [], customAn
         className: "w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm"
       }
     ));
-  })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "General customer feedback / quotes"), /* @__PURE__ */ React.createElement(
+  })), showGeneralFeedback && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "General customer feedback / quotes"), /* @__PURE__ */ React.createElement(
     "textarea",
     {
       value: feedback.note,
@@ -3493,7 +3511,7 @@ function TrackerFeedback({ feedback, setFeedback, customQuestions = [], customAn
     setPhotoOpen(false);
     setFeedback({ ...feedback, note: (feedback.note || "") + " [Photo attached]" });
     addToast("Photo attached", "green");
-  }, className: "mt-3 w-full bg-slate-900 text-white rounded-lg py-2.5 font-medium" }, "Capture & attach"))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Most memorable customer quote"), /* @__PURE__ */ React.createElement(
+  }, className: "mt-3 w-full bg-slate-900 text-white rounded-lg py-2.5 font-medium" }, "Capture & attach"))), showMemorableQuote && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Most memorable customer quote"), /* @__PURE__ */ React.createElement(
     "textarea",
     {
       value: feedback.quote,
@@ -3502,7 +3520,7 @@ function TrackerFeedback({ feedback, setFeedback, customQuestions = [], customAn
       className: "mt-1.5 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm italic",
       placeholder: '"..."'
     }
-  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs font-medium text-slate-700 mb-2" }, "Non-purchase reasons (tap all that apply)"), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap gap-2" }, allReasons.map((r) => {
+  )), showNonPurchaseReasons && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-xs font-medium text-slate-700 mb-2" }, "Non-purchase reasons (tap all that apply)"), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap gap-2" }, allReasons.map((r) => {
     const active = feedback.reasons.includes(r);
     return /* @__PURE__ */ React.createElement(
       "button",
@@ -3513,7 +3531,7 @@ function TrackerFeedback({ feedback, setFeedback, customQuestions = [], customAn
       },
       r
     );
-  }))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Missing / out-of-stock products"), /* @__PURE__ */ React.createElement("div", { className: "mt-1.5 flex gap-2" }, /* @__PURE__ */ React.createElement(
+  }))), showMissingProducts && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Missing / out-of-stock products"), /* @__PURE__ */ React.createElement("div", { className: "mt-1.5 flex gap-2" }, /* @__PURE__ */ React.createElement(
     "input",
     {
       value: feedback.missing,
@@ -3521,7 +3539,7 @@ function TrackerFeedback({ feedback, setFeedback, customQuestions = [], customAn
       placeholder: "e.g. 100ml tester \u2014 or scan / search",
       className: "flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm"
     }
-  ), /* @__PURE__ */ React.createElement("button", { onClick: openSearchForMissing, className: "px-3 py-2 border border-slate-300 rounded-lg text-sm inline-flex items-center gap-1 hover:bg-slate-50 text-slate-700" }, /* @__PURE__ */ React.createElement(Search, { className: "w-3.5 h-3.5" }), " Find")), feedback.missing && /* @__PURE__ */ React.createElement("div", { className: "mt-1.5 text-xs text-slate-500" }, "Tip: tap ", /* @__PURE__ */ React.createElement("strong", null, "Find"), " to attach a real SKU from the catalog instead of typing.")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Estimated lost revenue (\u20AC)"), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("button", { onClick: openSearchForMissing, className: "px-3 py-2 border border-slate-300 rounded-lg text-sm inline-flex items-center gap-1 hover:bg-slate-50 text-slate-700" }, /* @__PURE__ */ React.createElement(Search, { className: "w-3.5 h-3.5" }), " Find")), feedback.missing && /* @__PURE__ */ React.createElement("div", { className: "mt-1.5 text-xs text-slate-500" }, "Tip: tap ", /* @__PURE__ */ React.createElement("strong", null, "Find"), " to attach a real SKU from the catalog instead of typing.")), showLostRevenue && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Estimated lost revenue (\u20AC)"), /* @__PURE__ */ React.createElement(
     "input",
     {
       type: "number",
@@ -4799,6 +4817,20 @@ function ManagerConfig({ activePromoId, activePromoLabel, activeProject, hero, o
         onReloadProjects
       }
     )
+  ), /* @__PURE__ */ React.createElement(
+    SectionCard,
+    {
+      title: "Feedback & Insights sections",
+      action: /* @__PURE__ */ React.createElement("span", { className: "text-xs text-slate-400" }, "Which blocks the promoter sees on the Feedback tile")
+    },
+    /* @__PURE__ */ React.createElement(
+      FeedbackSectionsConfig,
+      {
+        activePromoId,
+        enabledModules: hero && hero.enabledModules,
+        onReloadProjects
+      }
+    )
   ), /* @__PURE__ */ React.createElement(SectionCard, { title: "Custom client-specific questions", action: /* @__PURE__ */ React.createElement("button", { onClick: openAdd, className: "text-xs font-medium text-blue-600 hover:underline" }, "+ Add question") }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-3" }, questions.map((q, idx) => {
     const shortId = q.id && /^Q\d+$/.test(String(q.id)) ? q.id : `Q${idx + 1}`;
     return /* @__PURE__ */ React.createElement("li", { key: q.id, className: "border border-slate-200 rounded-lg p-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-start justify-between gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 mb-1 flex-wrap" }, /* @__PURE__ */ React.createElement("span", { title: String(q.id) }, /* @__PURE__ */ React.createElement(Pill, { tone: "rose" }, shortId)), /* @__PURE__ */ React.createElement(Pill, { tone: "slate" }, q.type), /* @__PURE__ */ React.createElement(Pill, { tone: (q.section || "contact") === "shift" ? "amber" : "blue" }, (q.section || "contact") === "shift" ? "Per shift" : "Per contact"), /* @__PURE__ */ React.createElement("button", { onClick: () => toggleVisibility(q.id), className: "focus:outline-none" }, q.clientVisible ? /* @__PURE__ */ React.createElement(Pill, { tone: "green" }, "Client-visible") : /* @__PURE__ */ React.createElement(Pill, { tone: "slate" }, "Internal only"))), /* @__PURE__ */ React.createElement("div", { className: "text-sm font-medium text-slate-900" }, q.question), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-600 mt-1" }, /* @__PURE__ */ React.createElement("span", { className: "text-slate-500" }, "Latest response:"), " ", String(q.response))), /* @__PURE__ */ React.createElement("button", { onClick: () => openEdit(q), className: "text-xs text-slate-500 hover:text-slate-900" }, "Edit")));
@@ -5033,6 +5065,51 @@ function PromoterFormConfig({ activePromoId, enabledModules, promoterConfig, onR
     /* @__PURE__ */ React.createElement("div", { className: "text-xs font-semibold" }, l),
     /* @__PURE__ */ React.createElement("div", { className: `text-[10px] mt-0.5 ${state.product_mode === v ? "text-slate-300" : "text-slate-500"}` }, hint)
   )))));
+}
+function FeedbackSectionsConfig({ activePromoId, enabledModules, onReloadProjects }) {
+  const initial = useMemo(() => {
+    const out = {};
+    for (const s of FEEDBACK_SECTIONS) out[s.id] = isFeedbackSectionEnabled(enabledModules, s.id);
+    return out;
+  }, [JSON.stringify(enabledModules && enabledModules.feedback_sections)]);
+  const [state, setState] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setState(initial);
+  }, [initial]);
+  const toggle = async (id) => {
+    if (DATA_SOURCE !== "supabase" || !activePromoId) {
+      addToast("Feedback toggles only persist in live (Supabase) mode", "amber");
+      return;
+    }
+    const next = { ...state, [id]: !state[id] };
+    setState(next);
+    setSaving(true);
+    try {
+      const merged = { ...enabledModules || {}, feedback_sections: next };
+      await SupabaseAPI.updatePromotion(activePromoId, { enabled_modules: merged });
+      onReloadProjects && onReloadProjects();
+      addToast("Feedback sections updated", "green");
+    } catch (err) {
+      setState(state);
+      addToast(`Save failed: ${err.message || err}`, "rose");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return /* @__PURE__ */ React.createElement("ul", { className: "space-y-2" }, FEEDBACK_SECTIONS.map((s) => {
+    const on = state[s.id] !== false;
+    return /* @__PURE__ */ React.createElement("li", { key: s.id, className: "flex items-center justify-between border border-slate-200 rounded-lg px-3 py-2" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-medium" }, s.label), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, s.hint)), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => toggle(s.id),
+        disabled: saving,
+        className: `relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${on ? "bg-emerald-500" : "bg-slate-300"} ${saving ? "opacity-50" : ""}`,
+        "aria-pressed": on
+      },
+      /* @__PURE__ */ React.createElement("span", { className: `inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${on ? "translate-x-5" : "translate-x-1"}` })
+    ));
+  }), /* @__PURE__ */ React.createElement("li", { className: "text-[11px] text-slate-400 mt-1" }, 'Per-shift custom questions ("Daily counts") configured above always show on the Feedback tile regardless of these toggles.'));
 }
 function ClientReportConfig({ activePromoId, enabledModules, onReloadProjects }) {
   const initial = useMemo(() => {
@@ -5743,7 +5820,7 @@ function ClientReport({ onExit, clientId = null }) {
   })) : /* @__PURE__ */ React.createElement("div", { className: "py-6 text-center text-sm text-slate-500 italic" }, "No non-purchase feedback recorded yet.")), showSection("out_of_stock") && /* @__PURE__ */ React.createElement(SectionCard, { title: "Out-of-stock products & lost opportunity" }, sectionOOS.filter((o) => o.lostRevenue > 0).length > 0 ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("ul", { className: "space-y-2" }, sectionOOS.filter((o) => o.lostRevenue > 0).map((o) => /* @__PURE__ */ React.createElement("li", { key: o.product, className: "flex items-center justify-between text-sm border-b border-slate-100 pb-2 last:border-0" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, o.product), o.lostUnits != null && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, o.lostUnits, " units estimated lost")), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, fmtEUR(o.lostRevenue))))), /* @__PURE__ */ React.createElement("div", { className: "mt-3 text-xs text-slate-600" }, "Total estimated lost revenue: ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, fmtEUR(reportLostRev)), ". Addressing these gaps could materially lift the next campaign.")) : /* @__PURE__ */ React.createElement("div", { className: "py-6 text-center text-sm text-slate-500 italic" }, "No out-of-stock losses recorded yet."))), showSection("quotes") && /* @__PURE__ */ React.createElement(SectionCard, { title: "Voice of the customer" }, visibleQuotes.length > 0 ? /* @__PURE__ */ React.createElement("div", { className: "grid sm:grid-cols-2 gap-4" }, visibleQuotes.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "bg-slate-50 rounded-xl p-4 border-l-4 border-amber-400" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm italic text-slate-800 leading-relaxed" }, '"', q.quote, '"'), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-2" }, q.who)))) : /* @__PURE__ */ React.createElement("div", { className: "py-6 text-center text-sm text-slate-500 italic" }, "No customer quotes recorded yet.")), visibleCustomQs.length > 0 && /* @__PURE__ */ React.createElement(SectionCard, { title: "Brand-specific insights" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-6" }, visibleCustomQs.map((q) => /* @__PURE__ */ React.createElement("li", { key: q.id }, /* @__PURE__ */ React.createElement(CustomQAVisualisation, { q }))))), supaLive && visibleCustomQs.length === 0 && liveCustomQuestions && liveCustomQuestions.filter((q) => q.clientVisible).length === 0 && null, !supaLive && /* @__PURE__ */ React.createElement("div", { className: "bg-slate-900 text-white rounded-2xl p-6" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs uppercase tracking-wider text-slate-300 font-semibold" }, "Summary"), /* @__PURE__ */ React.createElement("h3", { className: "mt-2 text-xl font-semibold" }, "A strong start, with clear levers for the next campaign"), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Revenue at ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, targetPct, "%"), " of target with 4 days remaining."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Strongest pull from female travellers aged 35\u201344; floral notes resonate."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), " Sales clearly track the airport's long-haul departure waves \u2014 concentrate full staffing on the ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "12:00\u201313:00"), " and ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "17:00\u201319:00"), " banks."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " 100ml tester unavailability is the largest single loss \u2014 estimated ", fmtEUR(2322), " in missed sales."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " Price sensitivity is the second most common non-purchase reason \u2014 consider a bundle promotion for the next wave."))), supaLive && liveSummary && liveSummary.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "bg-slate-900 text-white rounded-2xl p-6" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs uppercase tracking-wider text-slate-300 font-semibold" }, "Summary"), /* @__PURE__ */ React.createElement("h3", { className: "mt-2 text-xl font-semibold" }, reportTargetPct >= 100 ? "Target met \u2014 clear levers to extend the campaign" : reportTargetPct >= 70 ? "On track \u2014 clear levers for the next campaign" : reportRevenue > 0 ? "Early signal \u2014 clear levers for the next campaign" : "Campaign report"), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, liveSummary.map((b, i) => /* @__PURE__ */ React.createElement("li", { key: i, className: "flex gap-2" }, b.tone === "ok" && /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), b.tone === "plane" && /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), b.tone === "warn" && /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), /* @__PURE__ */ React.createElement("span", null, b.text)))))), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-5xl mx-auto px-6 py-4 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Prepared by ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-700" }, "UCM"), " \xB7 Promotion Insights"), /* @__PURE__ */ React.createElement("span", null, "Report generated ", (/* @__PURE__ */ new Date()).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }), supaLive ? "" : " \xB7 Demo"))));
 }
 
-// ../../tmp/ucm-entry-m005pl6zsl8.jsx
+// ../../tmp/ucm-entry-0js5822mi9xp.jsx
 var root = createRoot(document.getElementById("root"));
 root.render(React2.createElement(App));
 

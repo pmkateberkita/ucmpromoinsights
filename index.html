@@ -6,7 +6,7 @@
 <style>body { font-family: Inter, system-ui, sans-serif; background: #f8fafc; } .ucm-loading { display:flex; align-items:center; justify-content:center; height:100vh; color:#64748b; font-size: 14px; }</style>
 <script type="importmap">{ "imports": { "react": "https://esm.sh/react@18.3.1", "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime", "react-dom": "https://esm.sh/react-dom@18.3.1", "react-dom/client": "https://esm.sh/react-dom@18.3.1/client", "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react", "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom", "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.4" } }</script>
 </head><body><div id="root"><div class="ucm-loading">Loading UCM Promotion Insights…</div></div><script type="module">
-// ../../tmp/ucm-entry-0js5822mi9xp.jsx
+// ../../tmp/ucm-entry-6zpj08h47wd.jsx
 import React2 from "react";
 import { createRoot } from "react-dom/client";
 
@@ -930,28 +930,49 @@ function aggregatePromoterPerformance(sales, shifts, notes, catalog, allowedIds)
     revPerContact: r.contacts > 0 ? r.revenue / r.contacts : 0
   })).sort((a, b) => b.revenue - a.revenue);
 }
-function aggregateGaps(shifts, allowedIds) {
-  const allowed = allowedIds instanceof Set ? allowedIds : Array.isArray(allowedIds) ? new Set(allowedIds) : null;
+function aggregateExpectedGaps(promotionRow, assignments, shifts, allowedIds) {
+  if (!promotionRow || !promotionRow.start_date) return [];
+  const start = /* @__PURE__ */ new Date(promotionRow.start_date + "T00:00:00");
+  if (isNaN(start.getTime())) return [];
   const today = /* @__PURE__ */ new Date();
   today.setHours(0, 0, 0, 0);
-  const out = [];
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const end = promotionRow.end_date ? /* @__PURE__ */ new Date(promotionRow.end_date + "T00:00:00") : yesterday;
+  const lastDay = end < yesterday ? end : yesterday;
+  if (start > lastDay) return [];
+  const submittedKey = /* @__PURE__ */ new Set();
   for (const sh of shifts || []) {
-    if (allowed !== null && !allowed.has(sh.promoter_id)) continue;
-    const d = sh.shift_date ? /* @__PURE__ */ new Date(sh.shift_date + "T00:00:00") : null;
-    if (!d) continue;
-    const submitted = sh.status === "submitted" || sh.status === "approved";
-    if (!submitted && d < today) {
-      out.push({
-        id: sh.id,
-        promoter: sh.promoters && sh.promoters.name || sh.promoter_id,
-        promoterId: sh.promoter_id || null,
-        date: sh.shift_date,
-        status: sh.status,
-        location: sh.location || "\u2014"
-      });
+    if (!sh || !sh.promoter_id || !sh.shift_date) continue;
+    if (sh.status === "submitted" || sh.status === "approved") {
+      submittedKey.add(`${sh.promoter_id}|${sh.shift_date}`);
     }
   }
-  return out;
+  const allowed = allowedIds instanceof Set ? allowedIds : Array.isArray(allowedIds) ? new Set(allowedIds) : null;
+  const gaps = [];
+  const isoDay = (d) => d.toISOString().slice(0, 10);
+  for (const a of assignments || []) {
+    const pid = a.promoter_id || a.promoters && a.promoters.id;
+    if (!pid) continue;
+    if (allowed && !allowed.has(pid)) continue;
+    const name = a.promoters && a.promoters.name || pid;
+    const d = new Date(start);
+    while (d <= lastDay) {
+      const iso = isoDay(d);
+      if (!submittedKey.has(`${pid}|${iso}`)) {
+        gaps.push({
+          id: `expected-${pid}-${iso}`,
+          promoter: name,
+          promoterId: pid,
+          date: iso,
+          status: "missing",
+          location: "\u2014"
+        });
+      }
+      d.setDate(d.getDate() + 1);
+    }
+  }
+  return gaps.sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
 }
 function aggregateLive(shifts, allowedIds) {
   const allowed = allowedIds instanceof Set ? allowedIds : Array.isArray(allowedIds) ? new Set(allowedIds) : null;
@@ -3839,6 +3860,10 @@ function ManagerApp({ onExit, onPreviewClient }) {
     location: pick(heroRaw && heroLoc.location, PROMOTION.location),
     startDate: pick(heroRaw && formatPromoDate(heroRaw.start_date), PROMOTION.startDate),
     endDate: pick(heroRaw && formatPromoDate(heroRaw.end_date), PROMOTION.endDate),
+    // Raw ISO dates kept alongside the formatted ones — needed by the
+    // calendar-based gap detector that drives daily-report reminders.
+    startDateIso: heroRaw && heroRaw.start_date ? String(heroRaw.start_date) : null,
+    endDateIso: heroRaw && heroRaw.end_date ? String(heroRaw.end_date) : null,
     status: heroRaw && heroRaw.status || "active",
     // target_revenue is the manager-editable revenue goal that drives the
     // KPI row, target progress bar, and "% of target" labels. Pull from the
@@ -4489,6 +4514,12 @@ function ManagerOverview({ reminderSent = {}, onSendReminder = () => {
     return Array.from(merged.values());
   }, [liveProductsRaw]);
   const assignedIds = useAssignedPromoterIds();
+  const overviewPromoId = useActivePromotionId();
+  const { data: overviewAssignments } = usePromoterAssignments(supaLive ? overviewPromoId : null);
+  const overviewPromotionRow = useMemo(() => {
+    if (!supaLive || !hero) return null;
+    return { start_date: hero.startDateIso || null, end_date: hero.endDateIso || null };
+  }, [supaLive, hero]);
   const liveTotals = isLive ? aggregateTotals(metrics.sales, metrics.shifts, metrics.notes, productCatalog, target) : null;
   const liveProducts = isLive ? aggregateProductPerformance(metrics.sales, productCatalog) : null;
   const revenue = liveTotals ? liveTotals.revenue : supaLive ? 0 : totalRevenue;
@@ -4516,7 +4547,7 @@ function ManagerOverview({ reminderSent = {}, onSendReminder = () => {
       return /* @__PURE__ */ React.createElement("div", { key: p.name }, /* @__PURE__ */ React.createElement("div", { className: "flex justify-between text-sm mb-1" }, /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, p.name), /* @__PURE__ */ React.createElement("span", { className: "text-slate-600" }, fmtEUR(p.revenue), " \xB7 ", p.units, "u")), /* @__PURE__ */ React.createElement(ProgressBar, { pct: barPct, tone: "blue" }), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-0.5" }, contacts2, " contacts \xB7 ", contacts2 > 0 ? (p.units / contacts2 * 100).toFixed(1) : "0.0", "% conv."));
     });
   })()))), /* @__PURE__ */ React.createElement("div", { className: "grid lg:grid-cols-2 gap-4" }, (() => {
-    const liveGaps = isLive ? aggregateGaps(metrics.shifts, assignedIds) : null;
+    const liveGaps = isLive ? aggregateExpectedGaps(overviewPromotionRow, overviewAssignments, metrics.shifts, assignedIds) : null;
     const rows = liveGaps || (supaLive ? [] : MISSING_REPORTS);
     return /* @__PURE__ */ React.createElement(SectionCard, { title: "Missing daily reports", action: /* @__PURE__ */ React.createElement(Pill, { tone: rows.length > 0 ? "rose" : "green" }, rows.length) }, rows.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-500" }, "All daily reports submitted.") : /* @__PURE__ */ React.createElement("ul", { className: "space-y-2" }, rows.map((m, i) => {
       const sent = reminderSent[i];
@@ -5820,7 +5851,7 @@ function ClientReport({ onExit, clientId = null }) {
   })) : /* @__PURE__ */ React.createElement("div", { className: "py-6 text-center text-sm text-slate-500 italic" }, "No non-purchase feedback recorded yet.")), showSection("out_of_stock") && /* @__PURE__ */ React.createElement(SectionCard, { title: "Out-of-stock products & lost opportunity" }, sectionOOS.filter((o) => o.lostRevenue > 0).length > 0 ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("ul", { className: "space-y-2" }, sectionOOS.filter((o) => o.lostRevenue > 0).map((o) => /* @__PURE__ */ React.createElement("li", { key: o.product, className: "flex items-center justify-between text-sm border-b border-slate-100 pb-2 last:border-0" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-medium" }, o.product), o.lostUnits != null && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500" }, o.lostUnits, " units estimated lost")), /* @__PURE__ */ React.createElement("div", { className: "font-semibold" }, fmtEUR(o.lostRevenue))))), /* @__PURE__ */ React.createElement("div", { className: "mt-3 text-xs text-slate-600" }, "Total estimated lost revenue: ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-900" }, fmtEUR(reportLostRev)), ". Addressing these gaps could materially lift the next campaign.")) : /* @__PURE__ */ React.createElement("div", { className: "py-6 text-center text-sm text-slate-500 italic" }, "No out-of-stock losses recorded yet."))), showSection("quotes") && /* @__PURE__ */ React.createElement(SectionCard, { title: "Voice of the customer" }, visibleQuotes.length > 0 ? /* @__PURE__ */ React.createElement("div", { className: "grid sm:grid-cols-2 gap-4" }, visibleQuotes.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "bg-slate-50 rounded-xl p-4 border-l-4 border-amber-400" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm italic text-slate-800 leading-relaxed" }, '"', q.quote, '"'), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-2" }, q.who)))) : /* @__PURE__ */ React.createElement("div", { className: "py-6 text-center text-sm text-slate-500 italic" }, "No customer quotes recorded yet.")), visibleCustomQs.length > 0 && /* @__PURE__ */ React.createElement(SectionCard, { title: "Brand-specific insights" }, /* @__PURE__ */ React.createElement("ul", { className: "space-y-6" }, visibleCustomQs.map((q) => /* @__PURE__ */ React.createElement("li", { key: q.id }, /* @__PURE__ */ React.createElement(CustomQAVisualisation, { q }))))), supaLive && visibleCustomQs.length === 0 && liveCustomQuestions && liveCustomQuestions.filter((q) => q.clientVisible).length === 0 && null, !supaLive && /* @__PURE__ */ React.createElement("div", { className: "bg-slate-900 text-white rounded-2xl p-6" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs uppercase tracking-wider text-slate-300 font-semibold" }, "Summary"), /* @__PURE__ */ React.createElement("h3", { className: "mt-2 text-xl font-semibold" }, "A strong start, with clear levers for the next campaign"), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Revenue at ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, targetPct, "%"), " of target with 4 days remaining."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), " Strongest pull from female travellers aged 35\u201344; floral notes resonate."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), " Sales clearly track the airport's long-haul departure waves \u2014 concentrate full staffing on the ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "12:00\u201313:00"), " and ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-white mx-1" }, "17:00\u201319:00"), " banks."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " 100ml tester unavailability is the largest single loss \u2014 estimated ", fmtEUR(2322), " in missed sales."), /* @__PURE__ */ React.createElement("li", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), " Price sensitivity is the second most common non-purchase reason \u2014 consider a bundle promotion for the next wave."))), supaLive && liveSummary && liveSummary.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "bg-slate-900 text-white rounded-2xl p-6" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs uppercase tracking-wider text-slate-300 font-semibold" }, "Summary"), /* @__PURE__ */ React.createElement("h3", { className: "mt-2 text-xl font-semibold" }, reportTargetPct >= 100 ? "Target met \u2014 clear levers to extend the campaign" : reportTargetPct >= 70 ? "On track \u2014 clear levers for the next campaign" : reportRevenue > 0 ? "Early signal \u2014 clear levers for the next campaign" : "Campaign report"), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, liveSummary.map((b, i) => /* @__PURE__ */ React.createElement("li", { key: i, className: "flex gap-2" }, b.tone === "ok" && /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), b.tone === "plane" && /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), b.tone === "warn" && /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), /* @__PURE__ */ React.createElement("span", null, b.text)))))), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-5xl mx-auto px-6 py-4 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Prepared by ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-700" }, "UCM"), " \xB7 Promotion Insights"), /* @__PURE__ */ React.createElement("span", null, "Report generated ", (/* @__PURE__ */ new Date()).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }), supaLive ? "" : " \xB7 Demo"))));
 }
 
-// ../../tmp/ucm-entry-0js5822mi9xp.jsx
+// ../../tmp/ucm-entry-6zpj08h47wd.jsx
 var root = createRoot(document.getElementById("root"));
 root.render(React2.createElement(App));
 

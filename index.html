@@ -6,7 +6,7 @@
 <style>body { font-family: Inter, system-ui, sans-serif; background: #f8fafc; } .ucm-loading { display:flex; align-items:center; justify-content:center; height:100vh; color:#64748b; font-size: 14px; }</style>
 <script type="importmap">{ "imports": { "react": "https://esm.sh/react@18.3.1", "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime", "react-dom": "https://esm.sh/react-dom@18.3.1", "react-dom/client": "https://esm.sh/react-dom@18.3.1/client", "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react", "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom", "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.4" } }</script>
 </head><body><div id="root"><div class="ucm-loading">Loading UCM Promotion Insights…</div></div><script type="module">
-// ../../tmp/ucm-entry-2hv2iaqok6t.jsx
+// ../../tmp/ucm-entry-cclfd45rgq.jsx
 import React2 from "react";
 import { createRoot } from "react-dom/client";
 
@@ -415,6 +415,69 @@ var SupabaseAPI = {
   // -- CUSTOM QUESTION ANSWERS -------------------------------
   // Each promoter answer is written as one row, jsonb body. Read with the
   // question label joined so the client report can show "Q · answer" pairs.
+  // Snapshot save for the Feedback & Insights tile. Wipes all feedback_notes
+  // for this shift and re-inserts whatever is currently non-empty. Idempotent
+  // and safe to call on every change — the promoter's view of the data is
+  // always the source of truth. Manager dashboards see the latest the moment
+  // the promoter types it (no waiting for end-of-day submit).
+  saveFeedbackSnapshot: async (shiftId, feedback) => {
+    if (!shiftId) return;
+    await supabase.from("feedback_notes").delete().eq("shift_id", shiftId);
+    const rows = [];
+    if (feedback && feedback.quote && String(feedback.quote).trim()) {
+      rows.push({ shift_id: shiftId, kind: "quote", text: String(feedback.quote).trim(), lost_revenue_eur: null });
+    }
+    if (feedback && feedback.note && String(feedback.note).trim()) {
+      rows.push({ shift_id: shiftId, kind: "observation", text: String(feedback.note).trim(), lost_revenue_eur: null });
+    }
+    if (feedback && (feedback.missing && String(feedback.missing).trim() || Number(feedback.lostRev) > 0)) {
+      rows.push({
+        shift_id: shiftId,
+        kind: "lost_revenue",
+        text: feedback.missing && String(feedback.missing).trim() || "Lost revenue (estimate)",
+        lost_revenue_eur: Number(feedback.lostRev) > 0 ? Number(feedback.lostRev) : null
+      });
+    }
+    for (const reason of feedback && Array.isArray(feedback.reasons) ? feedback.reasons : []) {
+      if (reason && String(reason).trim()) {
+        rows.push({ shift_id: shiftId, kind: "non_purchase", text: String(reason).trim(), lost_revenue_eur: null });
+      }
+    }
+    if (rows.length > 0) {
+      const { error } = await supabase.from("feedback_notes").insert(rows);
+      if (error) throw new Error(error.message);
+    }
+  },
+  // Snapshot save for per-shift custom questions ("Daily counts"). Wipes
+  // existing shift-level answers for the given question ids and re-inserts
+  // whatever is currently non-empty. Per-contact answers (interaction_id set)
+  // are untouched.
+  saveShiftAnswers: async (shiftId, shiftQuestions, customAnswers) => {
+    if (!shiftId || !Array.isArray(shiftQuestions) || shiftQuestions.length === 0) return;
+    const qIds = shiftQuestions.map((q) => q && q.id).filter(Boolean);
+    if (qIds.length === 0) return;
+    await supabase.from("custom_question_answers").delete().eq("shift_id", shiftId).is("customer_interaction_id", null).in("question_id", qIds);
+    const rows = [];
+    for (const q of shiftQuestions) {
+      const v = customAnswers ? customAnswers[q.id] : void 0;
+      if (v === void 0 || v === null || v === "") continue;
+      rows.push({ shift_id: shiftId, question_id: q.id, answer_json: { value: v }, customer_interaction_id: null });
+    }
+    if (rows.length > 0) {
+      const { error } = await supabase.from("custom_question_answers").insert(rows);
+      if (error) throw new Error(error.message);
+    }
+  },
+  // Push the checklist booleans onto the existing shifts columns.
+  saveChecklistFlags: async (shiftId, checklist) => {
+    if (!shiftId) return;
+    const patch = {
+      checklist_complete: !!(checklist && checklist.photo && checklist.stockConfirmed && checklist.briefingRead),
+      briefing_read: !!(checklist && checklist.briefingRead)
+    };
+    const { error } = await supabase.from("shifts").update(patch).eq("id", shiftId);
+    if (error) throw new Error(error.message);
+  },
   recordCustomAnswer: async (shiftId, questionId, answerValue, interactionId) => {
     if (!shiftId || !questionId) throw new Error("shift_id and question_id are required");
     const row = {
@@ -2889,6 +2952,39 @@ function PromoterApp({ onExit, userEmail }) {
     if (!isLive || !liveShift.shiftId) return;
     writeDraft("customAnswers", customAnswers);
   }, [isLive, liveShift.shiftId, customAnswers]);
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    hydratedRef.current = false;
+  }, [liveShift.shiftId]);
+  useEffect(() => {
+    if (!isLive || !liveShift.shiftId) return;
+    if (!hydratedRef.current) {
+      hydratedRef.current = true;
+      return;
+    }
+    const t = setTimeout(() => {
+      SupabaseAPI.saveFeedbackSnapshot(liveShift.shiftId, feedback).catch((err) => console.warn("feedback auto-save failed:", err && err.message ? err.message : err));
+    }, 1e3);
+    return () => clearTimeout(t);
+  }, [isLive, liveShift.shiftId, feedback]);
+  useEffect(() => {
+    if (!isLive || !liveShift.shiftId) return;
+    if (!hydratedRef.current) return;
+    const t = setTimeout(() => {
+      SupabaseAPI.saveChecklistFlags(liveShift.shiftId, checklist).catch((err) => console.warn("checklist auto-save failed:", err && err.message ? err.message : err));
+    }, 1e3);
+    return () => clearTimeout(t);
+  }, [isLive, liveShift.shiftId, checklist]);
+  useEffect(() => {
+    if (!isLive || !liveShift.shiftId) return;
+    if (!hydratedRef.current) return;
+    const shiftQs = (customQuestions || []).filter((q) => q && q.id && (q.section || "contact") === "shift");
+    if (shiftQs.length === 0) return;
+    const t = setTimeout(() => {
+      SupabaseAPI.saveShiftAnswers(liveShift.shiftId, shiftQs, customAnswers).catch((err) => console.warn("shift answers auto-save failed:", err && err.message ? err.message : err));
+    }, 1e3);
+    return () => clearTimeout(t);
+  }, [isLive, liveShift.shiftId, customAnswers, customQuestions]);
   useEffect(() => {
     if (!isLive || !liveShift.shiftId) return;
     let cancelled = false;
@@ -3756,27 +3852,11 @@ function TrackerSubmit({ setScreen, sales, contacts, feedback, samples, customAn
     }
     setSubmitting(true);
     try {
-      const writes = [];
-      if (feedback.quote && feedback.quote.trim()) {
-        writes.push(SupabaseAPI.recordFeedbackNote(shiftId, "quote", feedback.quote.trim(), null));
+      await SupabaseAPI.saveFeedbackSnapshot(shiftId, feedback || {});
+      const shiftQs = (customQuestions || []).filter((q) => q && q.id && (q.section || "contact") === "shift");
+      if (shiftQs.length > 0) {
+        await SupabaseAPI.saveShiftAnswers(shiftId, shiftQs, customAnswers || {});
       }
-      if (feedback.note && feedback.note.trim()) {
-        writes.push(SupabaseAPI.recordFeedbackNote(shiftId, "observation", feedback.note.trim(), null));
-      }
-      if (feedback.lostRev && Number(feedback.lostRev) > 0) {
-        writes.push(SupabaseAPI.recordFeedbackNote(shiftId, "lost_revenue", feedback.missing || "Lost revenue (estimate)", Number(feedback.lostRev)));
-      }
-      for (const reason of feedback.reasons || []) {
-        writes.push(SupabaseAPI.recordFeedbackNote(shiftId, "non_purchase", reason, null));
-      }
-      for (const q of customQuestions || []) {
-        if (!q || !q.id) continue;
-        if ((q.section || "contact") !== "shift") continue;
-        const v = customAnswers ? customAnswers[q.id] : void 0;
-        if (v === void 0 || v === null || v === "") continue;
-        writes.push(SupabaseAPI.recordCustomAnswer(shiftId, q.id, v, null));
-      }
-      await Promise.all(writes);
       const checklistDone = !!(checklist && checklist.photo && checklist.stockConfirmed && checklist.briefingRead);
       const shiftPatch = {
         status: "submitted",
@@ -6021,7 +6101,7 @@ function ClientReport({ onExit, clientId = null }) {
   })()), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, liveSummary.map((b, i) => /* @__PURE__ */ React.createElement("li", { key: i, className: "flex gap-2" }, b.tone === "ok" && /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), b.tone === "plane" && /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), b.tone === "warn" && /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), /* @__PURE__ */ React.createElement("span", null, b.text)))))), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-5xl mx-auto px-6 py-4 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Prepared by ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-700" }, "UCM"), " \xB7 Promotion Insights"), /* @__PURE__ */ React.createElement("span", null, "Report generated ", (/* @__PURE__ */ new Date()).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }), supaLive ? "" : " \xB7 Demo"))));
 }
 
-// ../../tmp/ucm-entry-2hv2iaqok6t.jsx
+// ../../tmp/ucm-entry-cclfd45rgq.jsx
 var root = createRoot(document.getElementById("root"));
 root.render(React2.createElement(App));
 

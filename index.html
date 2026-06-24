@@ -6,7 +6,7 @@
 <style>body { font-family: Inter, system-ui, sans-serif; background: #f8fafc; } .ucm-loading { display:flex; align-items:center; justify-content:center; height:100vh; color:#64748b; font-size: 14px; }</style>
 <script type="importmap">{ "imports": { "react": "https://esm.sh/react@18.3.1", "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime", "react-dom": "https://esm.sh/react-dom@18.3.1", "react-dom/client": "https://esm.sh/react-dom@18.3.1/client", "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react", "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom", "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.4" } }</script>
 </head><body><div id="root"><div class="ucm-loading">Loading UCM Promotion Insights…</div></div><script type="module">
-// ../../tmp/ucm-entry-p8xybry7fw.jsx
+// ../../tmp/ucm-entry-ra62pjgf33.jsx
 import React2 from "react";
 import { createRoot } from "react-dom/client";
 
@@ -1228,43 +1228,59 @@ function aggregateDailyRevenue(sales, catalog) {
   return Array.from(buckets.values()).sort((a, b) => a.iso < b.iso ? -1 : 1);
 }
 function aggregateDailyTrends(sales, interactions, promotionRow) {
-  const buckets = /* @__PURE__ */ new Map();
+  const isoLocal = (date) => {
+    if (!date || isNaN(date.getTime())) return null;
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  };
+  const nextDay = (iso) => {
+    const d = /* @__PURE__ */ new Date(iso + "T00:00:00");
+    d.setDate(d.getDate() + 1);
+    return isoLocal(d);
+  };
   const labelFor = (iso) => {
     const d = /* @__PURE__ */ new Date(iso + "T00:00:00");
     return isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
   };
+  const buckets = /* @__PURE__ */ new Map();
   const touch = (iso) => {
+    if (!iso) return null;
     if (!buckets.has(iso)) buckets.set(iso, { iso, day: labelFor(iso), contacts: 0, units: 0 });
     return buckets.get(iso);
   };
-  if (promotionRow && promotionRow.start_date) {
-    const start = /* @__PURE__ */ new Date(promotionRow.start_date + "T00:00:00");
-    const today = /* @__PURE__ */ new Date();
-    today.setHours(0, 0, 0, 0);
-    const end = promotionRow.end_date ? /* @__PURE__ */ new Date(promotionRow.end_date + "T00:00:00") : today;
-    const lastDay = end < today ? end : today;
-    if (!isNaN(start.getTime()) && start <= lastDay) {
-      const cursor = new Date(start);
-      while (cursor <= lastDay) {
-        touch(cursor.toISOString().slice(0, 10));
-        cursor.setDate(cursor.getDate() + 1);
-      }
+  const startIso = promotionRow && promotionRow.start_date ? String(promotionRow.start_date) : null;
+  const todayIso = isoLocal(/* @__PURE__ */ new Date());
+  const endIsoBound = promotionRow && promotionRow.end_date ? String(promotionRow.end_date) : todayIso;
+  const endIso = endIsoBound < todayIso ? endIsoBound : todayIso;
+  const inWindow = (iso) => {
+    if (!iso) return false;
+    if (startIso && iso < startIso) return false;
+    if (endIso && iso > endIso) return false;
+    return true;
+  };
+  if (startIso && startIso <= endIso) {
+    let cursor = startIso;
+    while (cursor && cursor <= endIso) {
+      touch(cursor);
+      cursor = nextDay(cursor);
     }
   }
   for (const s of sales || []) {
     const ts = s.recorded_at || s.occurred_at || s.created_at || s.sold_at || s.shifts && s.shifts.shift_date;
     if (!ts) continue;
     const d = new Date(ts);
-    if (isNaN(d.getTime())) continue;
-    const iso = d.toISOString().slice(0, 10);
+    const iso = isoLocal(d);
+    if (!inWindow(iso)) continue;
     touch(iso).units += Number(s.units) || 0;
   }
   for (const it of interactions || []) {
-    const ts = it.recorded_at;
-    if (!ts) continue;
-    const d = new Date(ts);
-    if (isNaN(d.getTime())) continue;
-    touch(d.toISOString().slice(0, 10)).contacts += 1;
+    if (!it || !it.recorded_at) continue;
+    const d = new Date(it.recorded_at);
+    const iso = isoLocal(d);
+    if (!inWindow(iso)) continue;
+    touch(iso).contacts += 1;
   }
   return Array.from(buckets.values()).sort((a, b) => a.iso < b.iso ? -1 : 1);
 }
@@ -6239,7 +6255,7 @@ function ClientReport({ onExit, clientId = null }) {
   })()), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, liveSummary.map((b, i) => /* @__PURE__ */ React.createElement("li", { key: i, className: "flex gap-2" }, b.tone === "ok" && /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), b.tone === "plane" && /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), b.tone === "warn" && /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), /* @__PURE__ */ React.createElement("span", null, b.text)))))), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-5xl mx-auto px-6 py-4 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Prepared by ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-700" }, "UCM"), " \xB7 Promotion Insights"), /* @__PURE__ */ React.createElement("span", null, "Report generated ", (/* @__PURE__ */ new Date()).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }), supaLive ? "" : " \xB7 Demo"))));
 }
 
-// ../../tmp/ucm-entry-p8xybry7fw.jsx
+// ../../tmp/ucm-entry-ra62pjgf33.jsx
 var root = createRoot(document.getElementById("root"));
 root.render(React2.createElement(App));
 

@@ -6,7 +6,7 @@
 <style>body { font-family: Inter, system-ui, sans-serif; background: #f8fafc; } .ucm-loading { display:flex; align-items:center; justify-content:center; height:100vh; color:#64748b; font-size: 14px; }</style>
 <script type="importmap">{ "imports": { "react": "https://esm.sh/react@18.3.1", "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime", "react-dom": "https://esm.sh/react-dom@18.3.1", "react-dom/client": "https://esm.sh/react-dom@18.3.1/client", "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react", "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom", "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.4" } }</script>
 </head><body><div id="root"><div class="ucm-loading">Loading UCM Promotion Insights…</div></div><script type="module">
-// ../../tmp/ucm-entry-ra62pjgf33.jsx
+// ../../tmp/ucm-entry-yh6ia7p0cwi.jsx
 import React2 from "react";
 import { createRoot } from "react-dom/client";
 
@@ -5769,7 +5769,16 @@ function ManagerLocations({ metrics, hero }) {
   if (supaLive) {
     return /* @__PURE__ */ React.createElement(SectionCard, { title: "Locations" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm text-slate-700" }, hero && hero.airport ? /* @__PURE__ */ React.createElement(React.Fragment, null, "Currently tracking ", /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, hero.airport, hero.location ? ` \xB7 ${hero.location}` : ""), ".") : "No location data yet for this promotion."), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 mt-2" }, "Multi-airport / multi-booth performance lights up here once we ingest more than one location string into the promotions table. For now, single-location metrics live in the Overview and Promoters tabs."));
   }
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, isLive && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2" }, "Multi-location intelligence (", hero ? hero.airport : "\u2014", ") shown as planning view. Per-booth metrics light up automatically as shifts log sales against each location string."), /* @__PURE__ */ React.createElement("div", { className: "grid md:grid-cols-4 gap-4" }, /* @__PURE__ */ React.createElement(StatCard, { label: "Active locations", value: LOCATIONS.filter((l) => l.status === "active").length, sub: `of ${LOCATIONS.length} total`, icon: MapPin, tone: "blue" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Avg revenue / location", value: fmtEUR(LOCATIONS.reduce((a, b) => a + b.revenue, 0) / LOCATIONS.length), sub: "this campaign", icon: Target, tone: "green" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Best performer", value: "Berlin BER T1", sub: `${fmtEUR(31480)} \xB7 A rating`, icon: Award, tone: "purple" }), /* @__PURE__ */ React.createElement(StatCard, { label: "OOS flags open", value: LOCATIONS.filter((l) => l.oosFlag).length, sub: "needs replenishment", icon: AlertTriangle, tone: "rose" })), /* @__PURE__ */ React.createElement(SectionCard, { title: "Performance by airport / terminal", action: /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, [
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, isLive && /* @__PURE__ */ React.createElement("div", { className: "text-xs text-slate-500 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2" }, "Multi-location intelligence (", hero ? hero.airport : "\u2014", ") shown as planning view. Per-booth metrics light up automatically as shifts log sales against each location string."), (() => {
+    const scope = filtered.length > 0 ? filtered : LOCATIONS;
+    const activeCount = scope.filter((l) => l.status === "active").length;
+    const totalRev = scope.reduce((a, b) => a + (b.revenue || 0), 0);
+    const avgRev = scope.length > 0 ? totalRev / scope.length : 0;
+    const best = scope.reduce((acc, l) => l.revenue > (acc.revenue || 0) ? l : acc, { revenue: 0 });
+    const oosCount = scope.filter((l) => l.oosFlag).length;
+    const scopeLabel = typeFilter === "all" ? "this campaign" : `${typeFilter} only`;
+    return /* @__PURE__ */ React.createElement("div", { className: "grid md:grid-cols-4 gap-4" }, /* @__PURE__ */ React.createElement(StatCard, { label: "Active locations", value: activeCount, sub: `of ${scope.length} ${scopeLabel}`, icon: MapPin, tone: "blue" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Avg revenue / location", value: fmtEUR(avgRev), sub: scopeLabel, icon: Target, tone: "green" }), /* @__PURE__ */ React.createElement(StatCard, { label: "Best performer", value: best.name || "\u2014", sub: best.revenue > 0 ? `${fmtEUR(best.revenue)}${best.rating ? ` \xB7 ${best.rating} rating` : ""}` : "\u2014", icon: Award, tone: "purple" }), /* @__PURE__ */ React.createElement(StatCard, { label: "OOS flags open", value: oosCount, sub: "needs replenishment", icon: AlertTriangle, tone: "rose" }));
+  })(), /* @__PURE__ */ React.createElement(SectionCard, { title: "Performance by airport / terminal", action: /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, [
     { k: "all", label: "All", tone: "slate" },
     { k: "retail", label: "Retail", tone: "blue" },
     { k: "duty-free", label: "Duty-free", tone: "amber" }
@@ -5790,34 +5799,60 @@ function ManagerReports({ metrics, hero }) {
   const supaLive = DATA_SOURCE === "supabase";
   const [generating, setGenerating] = useState(null);
   const [customizing, setCustomizing] = useState(null);
+  const CUSTOMIZE_SECTIONS = ["Headline KPIs", "Daily revenue", "Top products", "Demographics", "Customer voice", "Non-purchase reasons", "OOS / lost revenue", "Flight-bank insight", "Nationality mix"];
+  const [customSections, setCustomSections] = useState(() => new Set(CUSTOMIZE_SECTIONS));
+  const [customNote, setCustomNote] = useState("");
+  useEffect(() => {
+    if (customizing) {
+      setCustomSections(new Set(CUSTOMIZE_SECTIONS));
+      setCustomNote("");
+    }
+  }, [customizing]);
+  const toggleCustomSection = (s) => {
+    setCustomSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s);
+      else next.add(s);
+      return next;
+    });
+  };
   const [schedules, setSchedules] = useState(supaLive ? [] : [
     { id: 1, report: "Heinemann \xB7 Weekly performance", type: "Client", freq: "Weekly \xB7 Mondays", recipients: "a.weber@heinemann.de", last: "06 May 2026", next: "13 May 2026" },
     { id: 2, report: "Internal \xB7 Promoter coaching digest", type: "Internal", freq: "Weekly \xB7 Fridays", recipients: "ops@ucm.agency", last: "09 May 2026", next: "16 May 2026" }
   ]);
   const [addScheduleOpen, setAddScheduleOpen] = useState(false);
   const [scheduleDraft, setScheduleDraft] = useState({ report: "Weekly client report", recipients: "", freq: "Weekly \xB7 Mondays" });
-  const payloadForTitle = (title) => {
+  const payloadForTitle = (title, opts) => {
     const stamp = todayStamp();
+    const suffix = opts && Array.isArray(opts.sections) && opts.sections.length > 0 ? "custom-" : "";
+    const noteHtml = opts && opts.note ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px;margin:16px 0;font-family:Arial,sans-serif;font-size:13px;color:#78350f;"><strong>Cover note:</strong> ${String(opts.note).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c])}</div>` : "";
+    const sectionsHtml = opts && Array.isArray(opts.sections) && opts.sections.length > 0 ? `<div style="font-family:Arial,sans-serif;font-size:11px;color:#64748b;margin-bottom:8px;">Sections included: ${opts.sections.join(" \xB7 ")}</div>` : "";
     if (/client/i.test(title) || /weekly/i.test(title)) {
-      return { filename: `ucm-client-report-${stamp}.html`, mime: "text/html;charset=utf-8", content: buildClientReportHTML() };
+      let html = buildClientReportHTML();
+      if (noteHtml || sectionsHtml) {
+        html = html.replace(/<body([^>]*)>/, `<body$1>${sectionsHtml}${noteHtml}`);
+      }
+      return { filename: `ucm-${suffix}client-report-${stamp}.html`, mime: "text/html;charset=utf-8", content: html };
     }
     if (/promoter/i.test(title)) {
-      return { filename: `promoter-performance-${stamp}.csv`, mime: "text/csv;charset=utf-8", content: buildPromoterPerformanceCSV() };
+      return { filename: `${suffix}promoter-performance-${stamp}.csv`, mime: "text/csv;charset=utf-8", content: buildPromoterPerformanceCSV() };
     }
     if (/audit|operational/i.test(title)) {
-      return { filename: `operational-audit-${stamp}.csv`, mime: "text/csv;charset=utf-8", content: buildOOSCSV() };
+      return { filename: `${suffix}operational-audit-${stamp}.csv`, mime: "text/csv;charset=utf-8", content: buildOOSCSV() };
     }
-    return { filename: `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${stamp}.csv`, mime: "text/csv;charset=utf-8", content: buildFullDataDumpCSV() };
+    return { filename: `${suffix}${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${stamp}.csv`, mime: "text/csv;charset=utf-8", content: buildFullDataDumpCSV() };
   };
-  const generate = (title) => {
+  const generate = (title, options = null) => {
     if (supaLive) {
       addToast("Live exports coming soon \u2014 this template runs on demo data only", "amber");
       return;
     }
     setGenerating(title);
-    addToast(`Generating ${title}\u2026`, "blue");
+    const opts = options && (Array.isArray(options.sections) || options.note) ? options : null;
+    const subtitle = opts && opts.sections ? ` (${opts.sections.length} section${opts.sections.length === 1 ? "" : "s"})` : "";
+    addToast(`Generating ${title}${subtitle}\u2026`, "blue");
     setTimeout(() => {
-      const { filename, content, mime } = payloadForTitle(title);
+      const { filename, content, mime } = payloadForTitle(title, opts);
       const ok = downloadFile(filename, content, mime);
       setGenerating(null);
       if (ok) addToast(`${title} ready \u2014 saved as ${filename}`, "green");
@@ -5883,13 +5918,39 @@ function ManagerReports({ metrics, hero }) {
       onClose: () => setCustomizing(null),
       title: customizing ? `Customize: ${customizing}` : "",
       size: "lg",
-      footer: /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", { onClick: () => setCustomizing(null), className: "px-3 py-1.5 text-sm border border-slate-300 rounded-lg" }, "Cancel"), /* @__PURE__ */ React.createElement("button", { onClick: () => {
-        const t = customizing;
-        setCustomizing(null);
-        generate(t);
-      }, className: "px-3 py-1.5 text-sm bg-slate-900 text-white rounded-lg" }, "Save & generate"))
+      footer: /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", { onClick: () => setCustomizing(null), className: "px-3 py-1.5 text-sm border border-slate-300 rounded-lg" }, "Cancel"), /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          onClick: () => {
+            const t = customizing;
+            const opts = { sections: Array.from(customSections), note: customNote.trim() };
+            setCustomizing(null);
+            generate(t, opts);
+          },
+          disabled: customSections.size === 0,
+          className: "px-3 py-1.5 text-sm bg-slate-900 text-white rounded-lg disabled:opacity-50"
+        },
+        "Save & generate"
+      ))
     },
-    /* @__PURE__ */ React.createElement("div", { className: "space-y-3 text-sm" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Sections to include"), /* @__PURE__ */ React.createElement("div", { className: "mt-1.5 grid grid-cols-2 gap-1.5" }, ["Headline KPIs", "Daily revenue", "Top products", "Demographics", "Customer voice", "Non-purchase reasons", "OOS / lost revenue", "Flight-bank insight", "Nationality mix"].map((s) => /* @__PURE__ */ React.createElement("label", { key: s, className: "flex items-center gap-2 text-sm cursor-pointer border border-slate-200 rounded-lg px-2 py-1.5" }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", defaultChecked: true, className: "rounded" }), " ", /* @__PURE__ */ React.createElement("span", null, s))))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Cover note (optional)"), /* @__PURE__ */ React.createElement("textarea", { rows: 2, placeholder: "Short context for the recipient\u2026", className: "mt-1.5 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" })))
+    /* @__PURE__ */ React.createElement("div", { className: "space-y-3 text-sm" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Sections to include"), /* @__PURE__ */ React.createElement("div", { className: "mt-1.5 grid grid-cols-2 gap-1.5" }, CUSTOMIZE_SECTIONS.map((s) => /* @__PURE__ */ React.createElement("label", { key: s, className: "flex items-center gap-2 text-sm cursor-pointer border border-slate-200 rounded-lg px-2 py-1.5" }, /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "checkbox",
+        checked: customSections.has(s),
+        onChange: () => toggleCustomSection(s),
+        className: "rounded"
+      }
+    ), /* @__PURE__ */ React.createElement("span", null, s)))), /* @__PURE__ */ React.createElement("div", { className: "text-[11px] text-slate-400 mt-1" }, customSections.size, " of ", CUSTOMIZE_SECTIONS.length, " sections selected")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-xs font-medium text-slate-700" }, "Cover note (optional)"), /* @__PURE__ */ React.createElement(
+      "textarea",
+      {
+        rows: 2,
+        value: customNote,
+        onChange: (e) => setCustomNote(e.target.value),
+        placeholder: "Short context for the recipient\u2026",
+        className: "mt-1.5 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+      }
+    )))
   ), /* @__PURE__ */ React.createElement(
     Modal,
     {
@@ -6255,7 +6316,7 @@ function ClientReport({ onExit, clientId = null }) {
   })()), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, liveSummary.map((b, i) => /* @__PURE__ */ React.createElement("li", { key: i, className: "flex gap-2" }, b.tone === "ok" && /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), b.tone === "plane" && /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), b.tone === "warn" && /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), /* @__PURE__ */ React.createElement("span", null, b.text)))))), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-5xl mx-auto px-6 py-4 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Prepared by ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-700" }, "UCM"), " \xB7 Promotion Insights"), /* @__PURE__ */ React.createElement("span", null, "Report generated ", (/* @__PURE__ */ new Date()).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }), supaLive ? "" : " \xB7 Demo"))));
 }
 
-// ../../tmp/ucm-entry-ra62pjgf33.jsx
+// ../../tmp/ucm-entry-yh6ia7p0cwi.jsx
 var root = createRoot(document.getElementById("root"));
 root.render(React2.createElement(App));
 

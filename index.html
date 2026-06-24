@@ -6,7 +6,7 @@
 <style>body { font-family: Inter, system-ui, sans-serif; background: #f8fafc; } .ucm-loading { display:flex; align-items:center; justify-content:center; height:100vh; color:#64748b; font-size: 14px; }</style>
 <script type="importmap">{ "imports": { "react": "https://esm.sh/react@18.3.1", "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime", "react-dom": "https://esm.sh/react-dom@18.3.1", "react-dom/client": "https://esm.sh/react-dom@18.3.1/client", "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react", "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom", "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.4" } }</script>
 </head><body><div id="root"><div class="ucm-loading">Loading UCM Promotion Insights…</div></div><script type="module">
-// ../../tmp/ucm-entry-cclfd45rgq.jsx
+// ../../tmp/ucm-entry-zbz0g01nn1f.jsx
 import React2 from "react";
 import { createRoot } from "react-dom/client";
 
@@ -415,6 +415,23 @@ var SupabaseAPI = {
   // -- CUSTOM QUESTION ANSWERS -------------------------------
   // Each promoter answer is written as one row, jsonb body. Read with the
   // question label joined so the client report can show "Q · answer" pairs.
+  // All feedback notes for a shift — used by the promoter app to hydrate
+  // the Feedback & Insights screen when reopening after a previous submit
+  // (so the promoter sees what they entered, not empty fields).
+  listShiftFeedbackNotes: async (shiftId) => {
+    if (!shiftId) return [];
+    const { data, error } = await supabase.from("feedback_notes").select("*").eq("shift_id", shiftId);
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+  // Single shift row by id — used to hydrate the checklist booleans (and
+  // the submitted/approved status flag) on the promoter side.
+  getShift: async (shiftId) => {
+    if (!shiftId) return null;
+    const { data, error } = await supabase.from("shifts").select("*").eq("id", shiftId).single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
   // Snapshot save for the Feedback & Insights tile. Wipes all feedback_notes
   // for this shift and re-inserts whatever is currently non-empty. Idempotent
   // and safe to call on every change — the promoter's view of the data is
@@ -2942,6 +2959,58 @@ function PromoterApp({ onExit, userEmail }) {
   }, [isLive, liveShift.shiftId]);
   useEffect(() => {
     if (!isLive || !liveShift.shiftId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [notes, answers, shift] = await Promise.all([
+          SupabaseAPI.listShiftFeedbackNotes(liveShift.shiftId).catch(() => []),
+          SupabaseAPI.listShiftCustomAnswers(liveShift.shiftId).catch(() => []),
+          SupabaseAPI.getShift(liveShift.shiftId).catch(() => null)
+        ]);
+        if (cancelled) return;
+        const fb = { note: "", quote: "", reasons: [], missing: "", lostRev: 0 };
+        for (const n of notes || []) {
+          if (!n) continue;
+          if (n.kind === "observation") fb.note = n.text || "";
+          else if (n.kind === "quote") fb.quote = n.text || "";
+          else if (n.kind === "lost_revenue") {
+            fb.missing = n.text && n.text !== "Lost revenue (estimate)" ? n.text : "";
+            fb.lostRev = Number(n.lost_revenue_eur) || 0;
+          } else if (n.kind === "non_purchase" && n.text) fb.reasons.push(n.text);
+        }
+        const hasFbInDb = (notes || []).length > 0;
+        if (hasFbInDb) setFeedback((prev) => ({ ...prev, ...fb }));
+        const ca = {};
+        for (const a of answers || []) {
+          if (!a || a.customer_interaction_id) continue;
+          const raw = a.answer_json && Object.prototype.hasOwnProperty.call(a.answer_json, "value") ? a.answer_json.value : a.answer_json;
+          if (raw !== void 0 && raw !== null && raw !== "") ca[a.question_id] = raw;
+        }
+        if (Object.keys(ca).length > 0) setCustomAnswers((prev) => ({ ...prev, ...ca }));
+        if (shift) {
+          setChecklist((prev) => ({
+            ...prev,
+            briefingRead: !!shift.briefing_read || prev.briefingRead,
+            // checklist_complete is the AND of all three at submit time; we
+            // hydrate it as "all done" if it's true, otherwise leave whatever
+            // the local draft had so the promoter doesn't lose intermediate
+            // progress they hadn't yet submitted.
+            photo: shift.checklist_complete ? true : prev.photo,
+            stockConfirmed: shift.checklist_complete ? true : prev.stockConfirmed
+          }));
+          if (shift.status === "submitted" || shift.status === "approved") {
+            setSubmitted(true);
+          }
+        }
+      } catch (_) {
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isLive, liveShift.shiftId]);
+  useEffect(() => {
+    if (!isLive || !liveShift.shiftId) return;
     writeDraft("feedback", feedback);
   }, [isLive, liveShift.shiftId, feedback]);
   useEffect(() => {
@@ -3898,7 +3967,14 @@ function TrackerSubmit({ setScreen, sales, contacts, feedback, samples, customAn
     /* @__PURE__ */ React.createElement(Send, { className: "w-4 h-4" }),
     " ",
     submitting ? "Submitting\u2026" : "Submit report"
-  ) : /* @__PURE__ */ React.createElement("div", { className: "bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center" }, /* @__PURE__ */ React.createElement("div", { className: "w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto" }, /* @__PURE__ */ React.createElement(Check, { className: "w-5 h-5" })), /* @__PURE__ */ React.createElement("div", { className: "mt-2 font-semibold text-emerald-900" }, "Report submitted"), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-emerald-700 mt-1" }, "Your data is now on the manager dashboard. You can edit until midnight.")), /* @__PURE__ */ React.createElement("button", { onClick: () => setScreen("tracker-home"), className: "w-full text-sm text-slate-600 py-2" }, "Back to tracker home"));
+  ) : /* @__PURE__ */ React.createElement("div", { className: "bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center space-y-3" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto" }, /* @__PURE__ */ React.createElement(Check, { className: "w-5 h-5" })), /* @__PURE__ */ React.createElement("div", { className: "mt-2 font-semibold text-emerald-900" }, "Report submitted"), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-emerald-700 mt-1" }, "Your data is on the manager dashboard. ", /* @__PURE__ */ React.createElement("span", { className: "font-medium" }, "Edits keep saving automatically"), " until midnight \u2014 no need to re-submit.")), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => setScreen("tracker-home"),
+      className: "w-full bg-white border border-emerald-300 text-emerald-800 text-sm font-medium rounded-lg py-2 hover:bg-emerald-50"
+    },
+    "Edit my report"
+  )), /* @__PURE__ */ React.createElement("button", { onClick: () => setScreen("tracker-home"), className: "w-full text-sm text-slate-600 py-2" }, "Back to tracker home"));
 }
 var PROMOTION_LIST = [
   { id: "P-2026-05", brand: "Chanel", client: "Gebr. Heinemann", note: "Active \xB7 Berlin BER \xB7 Terminal 1" }
@@ -6101,7 +6177,7 @@ function ClientReport({ onExit, clientId = null }) {
   })()), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, liveSummary.map((b, i) => /* @__PURE__ */ React.createElement("li", { key: i, className: "flex gap-2" }, b.tone === "ok" && /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), b.tone === "plane" && /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), b.tone === "warn" && /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), /* @__PURE__ */ React.createElement("span", null, b.text)))))), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-5xl mx-auto px-6 py-4 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Prepared by ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-700" }, "UCM"), " \xB7 Promotion Insights"), /* @__PURE__ */ React.createElement("span", null, "Report generated ", (/* @__PURE__ */ new Date()).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }), supaLive ? "" : " \xB7 Demo"))));
 }
 
-// ../../tmp/ucm-entry-cclfd45rgq.jsx
+// ../../tmp/ucm-entry-zbz0g01nn1f.jsx
 var root = createRoot(document.getElementById("root"));
 root.render(React2.createElement(App));
 

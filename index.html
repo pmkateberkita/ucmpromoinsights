@@ -6,7 +6,7 @@
 <style>body { font-family: Inter, system-ui, sans-serif; background: #f8fafc; } .ucm-loading { display:flex; align-items:center; justify-content:center; height:100vh; color:#64748b; font-size: 14px; }</style>
 <script type="importmap">{ "imports": { "react": "https://esm.sh/react@18.3.1", "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime", "react-dom": "https://esm.sh/react-dom@18.3.1", "react-dom/client": "https://esm.sh/react-dom@18.3.1/client", "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react", "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom", "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.4" } }</script>
 </head><body><div id="root"><div class="ucm-loading">Loading UCM Promotion Insights…</div></div><script type="module">
-// ../../tmp/ucm-entry-zzt182xomxa.jsx
+// ../../tmp/ucm-entry-18zbv4en0uj.jsx
 import React2 from "react";
 import { createRoot } from "react-dom/client";
 
@@ -6139,84 +6139,76 @@ function ClientReport({ onExit, clientId = null }) {
   const liveSummary = useMemo(() => {
     if (!supaLive) return null;
     const bullets = [];
+    const tookCount = isFreeMode ? (liveInteractions || []).filter((i) => i && i.purchased).length : 0;
+    const conversionPct = reportContacts > 0 ? isFreeMode ? Math.round(tookCount / reportContacts * 100) : Math.round(reportUnits / reportContacts * 100) : 0;
+    const sortKey = isFreeMode ? "contacts" : "revenue";
+    const rankedPromoters = (sectionPromoterBreakdown || []).slice().sort((a, b) => (Number(b[sortKey]) || 0) - (Number(a[sortKey]) || 0));
+    const promotersWithActivity = rankedPromoters.filter((p) => (Number(p[sortKey]) || 0) > 0);
+    const promoterTotal = promotersWithActivity.reduce((a, p) => a + (Number(p[sortKey]) || 0), 0);
+    const topPromoter = promotersWithActivity[0] || null;
+    const topShare = topPromoter && promoterTotal > 0 ? Math.round(Number(topPromoter[sortKey]) / promoterTotal * 100) : 0;
+    const inactiveCount = rankedPromoters.length - promotersWithActivity.length;
     if (!isFreeMode && reportTarget > 0) {
-      bullets.push({
-        tone: reportTargetPct >= 70 ? "ok" : "warn",
-        text: `Revenue at ${reportTargetPct}% of the ${fmtEUR(reportTarget)} target.`
-      });
+      const gap = reportTarget - reportRevenue;
+      const verdict = reportTargetPct >= 100 ? "Target met \u2014 recommend extending the campaign window or scaling SKU coverage to compound the win." : reportTargetPct >= 70 ? `On track \u2014 ${fmtEUR(gap)} to close. Recommend tightening the top-3 SKUs and adding incentive on conversion-positive promoters.` : `${reportTargetPct}% of target \u2014 ${fmtEUR(gap)} gap. Recommend reviewing booth coverage at peak hours and revisiting price-perception messaging.`;
+      bullets.push({ tone: reportTargetPct >= 70 ? "ok" : "warn", text: `Revenue at ${reportTargetPct}% of the ${fmtEUR(reportTarget)} target. ${verdict}` });
     } else if (!isFreeMode && reportRevenue > 0) {
-      bullets.push({ tone: "ok", text: `Revenue to date: ${fmtEUR(reportRevenue)} across ${reportUnits} units sold.` });
+      bullets.push({ tone: "ok", text: `${fmtEUR(reportRevenue)} delivered across ${reportUnits} units. Recommend setting a revenue target for the next wave so performance has a benchmark.` });
     }
     if (reportContacts > 0) {
       if (isFreeMode) {
-        const tookCount = (liveInteractions || []).filter((i) => i && i.purchased).length;
-        const pct = reportContacts > 0 ? Math.round(tookCount / reportContacts * 100) : 0;
-        bullets.push({
-          tone: "ok",
-          text: `${reportContacts} customers engaged \xB7 ${tookCount} took the promo (${pct}% conversion).`
-        });
+        const verdict = conversionPct >= 60 ? "Strong conversion \u2014 recommend scaling the campaign or moving the booth closer to high-traffic windows." : conversionPct >= 30 ? "Mid-tier conversion \u2014 recommend A/B testing two booth scripts to find the +10pt lift." : "Below benchmark \u2014 recommend a script + offer review before the next wave; current conversion suggests low signal-to-noise.";
+        bullets.push({ tone: conversionPct >= 30 ? "ok" : "warn", text: `${reportContacts} customers engaged \xB7 ${tookCount} took the promo (${conversionPct}% conversion). ${verdict}` });
       } else {
-        const conv = reportContacts > 0 ? Math.round(reportUnits / reportContacts * 100) : 0;
-        bullets.push({
-          tone: "ok",
-          text: `${reportContacts} customers engaged${conv > 0 ? ` \xB7 ${conv}% conversion to purchase` : ""}.`
-        });
+        const verdict = conversionPct >= 40 ? "Strong conversion \u2014 the booth message is landing. Recommend keeping the current script and protecting prime-hour staffing." : conversionPct >= 15 ? "Mid-tier conversion \u2014 recommend testing a bundle or sample-handover at the booth to lift purchase intent." : "Below benchmark \u2014 recommend retraining promoters on objection-handling for the top non-purchase reason listed below.";
+        bullets.push({ tone: conversionPct >= 15 ? "ok" : "warn", text: `${reportContacts} customers engaged${conversionPct > 0 ? ` \xB7 ${conversionPct}% conversion to purchase` : ""}. ${verdict}` });
       }
     }
     if (hasCustomerTypes && sectionCustomerTypes && sectionCustomerTypes.length > 0) {
       const top = sectionCustomerTypes[0];
-      bullets.push({
-        tone: "ok",
-        text: `Strongest pull from ${top.value} (${top.pct}% of engaged customers).`
-      });
+      const second = sectionCustomerTypes[1];
+      const isDominant = top.pct >= 60;
+      const action = isDominant ? `Recommend a separate outreach play for ${second ? second.value : "the under-represented segment"} to broaden the funnel next wave.` : `Balanced mix \u2014 recommend keeping the same booth approach; no segment is being missed.`;
+      bullets.push({ tone: "ok", text: `Strongest pull from ${top.value} (${top.pct}% of engaged customers). ${action}` });
     } else if (liveDemographics && liveDemographics.gender.length > 0) {
       const topGender = [...liveDemographics.gender].sort((a, b) => b.value - a.value)[0];
       const topAge = liveDemographics.age.length > 0 ? [...liveDemographics.age].sort((a, b) => b.value - a.value)[0] : null;
-      bullets.push({
-        tone: "ok",
-        text: `Strongest pull from ${topGender.name.toLowerCase()} customers${topAge ? ` aged ${topAge.name}` : ""}.`
-      });
+      bullets.push({ tone: "ok", text: `Strongest pull from ${topGender.name.toLowerCase()} customers${topAge ? ` aged ${topAge.name}` : ""}. Recommend tightening creative + product mix toward this segment for the next campaign brief.` });
     }
-    if (sectionPromoterBreakdown && sectionPromoterBreakdown.length > 1) {
-      const top = sectionPromoterBreakdown[0];
-      if (top && (top.contacts > 0 || top.units > 0)) {
-        const metric = isFreeMode ? `${top.contacts} customer${top.contacts === 1 ? "" : "s"}` : top.revenue > 0 ? `${fmtEUR(top.revenue)} revenue` : `${top.units} units`;
+    if (topPromoter) {
+      const metricLabel = isFreeMode ? `${topPromoter.contacts} customer${topPromoter.contacts === 1 ? "" : "s"}` : topPromoter.revenue > 0 ? `${fmtEUR(topPromoter.revenue)} revenue` : `${topPromoter.units} units`;
+      const concentrationNote = topShare >= 40 && promotersWithActivity.length > 1 ? ` \u2014 ${topShare}% of all ${isFreeMode ? "contacts" : "revenue"} came from this promoter alone. Recommend capturing their booth approach as a playbook and rolling it out to the rest of the roster.` : promotersWithActivity.length > 1 ? " \u2014 recommend recognising the top-3 contributors publicly and using their tactics in the next briefing." : "";
+      bullets.push({ tone: "ok", text: `Top performer: ${topPromoter.name} with ${metricLabel}${concentrationNote}` });
+    }
+    if (inactiveCount > 0 && rankedPromoters.length > 0) {
+      const inactivePct = Math.round(inactiveCount / rankedPromoters.length * 100);
+      if (inactivePct >= 30) {
         bullets.push({
-          tone: "ok",
-          text: `Top performer: ${top.name} with ${metric}.`
+          tone: "warn",
+          text: `${inactiveCount} of ${rankedPromoters.length} assigned promoters (${inactivePct}%) logged zero ${isFreeMode ? "contacts" : "sales"}. Recommend a coverage audit and a 1:1 check-in before the next shift cycle.`
         });
       }
     }
     if (sectionHourly.length > 0) {
       const peak = [...sectionHourly].sort((a, b) => b.sales - a.sales)[0];
       if (peak && peak.sales > 0) {
-        bullets.push({
-          tone: "plane",
-          text: `Peak activity around ${peak.hour} \u2014 concentrate staffing on the busiest hour.`
-        });
+        bullets.push({ tone: "plane", text: `Peak activity around ${peak.hour}. Recommend double-staffing the booth in the hour either side of peak and pulling back coverage during the slow window to free budget.` });
       }
     }
     if (!isFreeMode && sectionOOS.length > 0) {
-      const top = sectionOOS[0];
-      if (top && top.lostRevenue > 0) {
-        bullets.push({
-          tone: "warn",
-          text: `${top.product} is the largest single revenue loss \u2014 estimated ${fmtEUR(top.lostRevenue)} in missed sales.`
-        });
+      const topOOS = sectionOOS[0];
+      if (topOOS && topOOS.lostRevenue > 0) {
+        bullets.push({ tone: "warn", text: `${topOOS.product} is the single biggest revenue leak \u2014 ${fmtEUR(topOOS.lostRevenue)} in missed sales. Recommend prioritising replenishment of this SKU at the booth.` });
       }
     }
-    if (!isFreeMode && sectionNonPurchase.length > 1) {
-      const second = sectionNonPurchase[1];
-      bullets.push({
-        tone: "warn",
-        text: `"${second.reason}" is the second most common non-purchase reason \u2014 consider addressing it in the next wave.`
-      });
+    if (!isFreeMode && sectionNonPurchase.length > 0) {
+      const top = sectionNonPurchase[0];
+      if (top && top.count > 0) {
+        bullets.push({ tone: "warn", text: `"${top.reason}" is the top non-purchase reason. Recommend a targeted creative or offer addressing this in the next campaign brief.` });
+      }
     }
     if (bullets.length === 0) {
-      bullets.push({
-        tone: "ok",
-        text: "Campaign data is still being collected \u2014 this summary will fill in as shifts are submitted."
-      });
+      bullets.push({ tone: "ok", text: "Campaign data is still being collected \u2014 this summary will fill in as shifts are submitted." });
     }
     return bullets;
   }, [supaLive, isFreeMode, hasCustomerTypes, reportTarget, reportTargetPct, reportRevenue, reportUnits, reportContacts, liveDemographics, sectionHourly, sectionOOS, sectionNonPurchase, sectionCustomerTypes, sectionPromoterBreakdown, liveInteractions]);
@@ -6369,7 +6361,7 @@ function ClientReport({ onExit, clientId = null }) {
   })()), /* @__PURE__ */ React.createElement("ul", { className: "mt-4 space-y-2 text-sm text-slate-200" }, liveSummary.map((b, i) => /* @__PURE__ */ React.createElement("li", { key: i, className: "flex gap-2" }, b.tone === "ok" && /* @__PURE__ */ React.createElement(Check, { className: "w-4 h-4 mt-0.5 text-emerald-400 flex-shrink-0" }), b.tone === "plane" && /* @__PURE__ */ React.createElement(Plane, { className: "w-4 h-4 mt-0.5 text-cyan-300 flex-shrink-0" }), b.tone === "warn" && /* @__PURE__ */ React.createElement(AlertTriangle, { className: "w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" }), /* @__PURE__ */ React.createElement("span", null, b.text)))))), /* @__PURE__ */ React.createElement("footer", { className: "border-t border-slate-200 bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "max-w-5xl mx-auto px-6 py-4 text-xs text-slate-500 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", null, "Prepared by ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-slate-700" }, "UCM"), " \xB7 Promotion Insights"), /* @__PURE__ */ React.createElement("span", null, "Report generated ", (/* @__PURE__ */ new Date()).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }), supaLive ? "" : " \xB7 Demo"))));
 }
 
-// ../../tmp/ucm-entry-zzt182xomxa.jsx
+// ../../tmp/ucm-entry-18zbv4en0uj.jsx
 var root = createRoot(document.getElementById("root"));
 root.render(React2.createElement(App));
 
